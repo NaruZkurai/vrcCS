@@ -1,1 +1,1 @@
-namespace nzk {public static string Sipc(string a, string b){return System.IO.Path.Combine(a, b);}}
+public static class nzk {public static string Sipc(string a, string b){return System.IO.Path.Combine(a, b);}}

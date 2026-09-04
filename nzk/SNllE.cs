@@ -1,1 +1,1 @@
-namespace nzk{public static bool SNllE(string a) {System.String.IsNullOrEmpty(a);}}
+public static class nzk{public static bool SNllE(string a) {System.String.IsNullOrEmpty(a);}}
