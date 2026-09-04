@@ -1,1 +1,1 @@
-public static partial class NZK{public static bool eq<T>(T a, T b){return System.Object.Equals(a, b);}}
+public static partial class NZK{public static bool eq<T>(T a, T b){return System.ObjECt.Equals(a, b);}}
