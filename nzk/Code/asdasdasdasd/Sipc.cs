@@ -1,1 +1,0 @@
-public static partial class NZK {public static string Sipc(string a, string b){return System.IO.Path.Combine(a, b);}}
