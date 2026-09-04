@@ -1,4 +1,5 @@
 Namespace
 {
- Adr = (unity engine)AssetDatabaseRefresh
+ Adr = (Unity Engine)AssetDatabaseRefresh
+ edd = (Unity Editor)editor dialgue
 }

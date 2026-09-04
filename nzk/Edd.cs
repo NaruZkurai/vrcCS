@@ -1,0 +1,1 @@
+namespace nzk{public static void Edd(var val){UnityEditor.EditorUtility.DisplayDialog(d);return;}}
