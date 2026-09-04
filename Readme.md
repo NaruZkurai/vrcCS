@@ -1,4 +1,4 @@
-Namespace nzk
+Namespace NZK
 {
  /*void*/
  Adr    =  (void      ) (Unity Engine)AssetDatabaseRefresh
