@@ -1,0 +1,1 @@
+public static partial class nzk{public static bool ec<T>(T a, T b){return System.Collections.Generic.EqualityComparer<T>.Default.Equals(a, b);}}

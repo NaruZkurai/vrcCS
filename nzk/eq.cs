@@ -1,0 +1,1 @@
+public static partial class nzk{public static bool eq<T>(T a, T b){return object.Equals(a, b);}}
