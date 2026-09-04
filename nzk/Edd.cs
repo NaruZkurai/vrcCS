@@ -1,1 +1,1 @@
-namespace nzk{public static void Edd(var val){UnityEditor.EditorUtility.DisplayDialog(d);return;}}
+namespace nzk{public static void Edd(string val){UnityEditor.EditorUtility.DisplayDialog(d);return;}}
