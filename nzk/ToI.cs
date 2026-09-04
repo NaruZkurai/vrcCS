@@ -1,0 +1,1 @@
+namespace nzk{public static int ToI(var value){return System.Convert.ToInt32(value);}}

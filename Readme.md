@@ -4,4 +4,6 @@ Namespace nzk
  edd  =  (None void) (Unity Editor)editor dialgue
  noe  =  (bool     ) null or empty
  sipc =  (string   ) System.IO.Path.Combine
+ ToI =  (Int       ) To Intiger 32bit
+
 }
