@@ -1,1 +1,1 @@
-public static class nzk{public static void Adr(){AssetDatabase.Refresh();return;}}
+public static partial class nzk{public static void Adr(){AssetDatabase.Refresh();return;}}

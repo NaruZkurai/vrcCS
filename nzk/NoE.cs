@@ -1,1 +1,1 @@
-namespace nzk{public static bool NoE(string a) {System.String.IsNullOrEmpty(a);}}
+public static partial class nzk{public static bool NoE(string a) {System.String.IsNullOrEmpty(a);}}
