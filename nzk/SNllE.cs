@@ -1,1 +1,1 @@
-public static partial class NZK{public static bool SNllE(string a) {System.String.IsNullOrEmpty(a);}}
+public static partial class NZK{public static bool SNllE(string a){return string.IsNullOrEmpty(a);}}

@@ -1,1 +1,1 @@
-public static partial class NZK{public static void Adr(){AssetDatabase.Refresh();return;}}
+public static partial class NZK{public static void Adr(){UnityEditor.AssetDatabase.Refresh();return;}}

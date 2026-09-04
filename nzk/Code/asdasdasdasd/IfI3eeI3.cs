@@ -7,4 +7,5 @@ public static partial class NZK
         && NZK.EC(zVal, z))
     { return true; }
     else
-    { return false; } } }
+    { return false; } }
+}
