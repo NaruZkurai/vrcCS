@@ -1,9 +1,13 @@
 Namespace nzk
 {
- Adr  =  (None void) (Unity Engine)AssetDatabaseRefresh
- edd  =  (None void) (Unity Editor)editor dialgue
- noe  =  (bool     ) null or empty
- sipc =  (string   ) System.IO.Path.Combine
- ToI =  (Int       ) To Intiger 32bit
-
+ /*void*/
+ Adr    =  (void      ) (Unity Engine)AssetDatabaseRefresh
+ edd    =  (void      ) (Unity Editor)editor dialgue
+ /*Bool*/
+ SNllE  =  (bool      ) null or empty
+ /*String*/
+ sipc   =  (string    ) System.IO.Path.Combine
+ /*Int32*/
+ ToI    =  (Int       ) To Intiger 32bit
+ /*Float*/
 }

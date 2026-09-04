@@ -1,1 +1,0 @@
-namespace nzk{public static bool Noe(string a) {System.String.IsNullOrEmpty(a);}}
