@@ -1,5 +1,7 @@
 Namespace
 {
- Adr = (Unity Engine)AssetDatabaseRefresh
- edd = (Unity Editor)editor dialgue
+ Adr = (None void) (Unity Engine)AssetDatabaseRefresh
+ edd = (None void) (Unity Editor)editor dialgue
+ noe = (bool     ) null or empty
+
 }
