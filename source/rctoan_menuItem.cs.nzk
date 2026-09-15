@@ -17,7 +17,7 @@ namespace NZK { public static partial class Core { public static partial class M
 
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", true)]
   public static bool ValidateFixZeroScaleAnimationsAsset()
-  { return NZK.Core.Validations.HasSelectedAnimations(); }
+  { return NZK.Core.Validations.HasSelectedZeroScaleAnimations(); }
 
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", false, 30)]
   public static void FixZeroScaleAnimationsAsset()

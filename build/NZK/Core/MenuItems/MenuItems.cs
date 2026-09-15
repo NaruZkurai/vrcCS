@@ -18,7 +18,7 @@ public static partial class MenuItems
   { return NZK.Core.Validations.HasSelectedAnimations(); }
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", true)]
   public static bool ValidateFixZeroScaleAnimationsAsset()
-  { return NZK.Core.Validations.HasSelectedAnimations(); }
+  { return NZK.Core.Validations.HasSelectedZeroScaleAnimations(); }
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", false, 30)]
   public static void FixZeroScaleAnimationsAsset()
   { string[] guids = UnityEditor.Selection.assetGUIDs;
