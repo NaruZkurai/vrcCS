@@ -61,7 +61,7 @@ Unity's bundled Roslyn (`DotNetSdkRoslyn/csc.dll`) and the VRChat SDK
 assemblies from `/nzk/unity/vrc/!_CC_Kiga 4/Packages`.
 
 ### Known-good baseline
-
+On local testing without unity:
 3 errors, all pre-existing and unrelated to the toolkit sources:
 
 ```
@@ -81,3 +81,9 @@ failures. Anything else is a genuine regression.
    alongside its own generated output (that yields CS0111/CS0102 duplicates).
 4. Use **bash**, not zsh, for these commands — zsh autocorrect mangles
    heredocs and filenames.
+# Other notes
+obviously this readme is more for ai than humans 
+yes this project has some in it
+does it mater which ones i use?
+idk i swapp around alot. stuff like deepseek and qwen or other local stuff.
+i prefer 9b > anything coz its a good balence of fast to able to use tools
