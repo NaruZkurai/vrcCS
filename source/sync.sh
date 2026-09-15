@@ -139,13 +139,27 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
     [ -f "./$f.meta" ] && cp -f "./$f.meta" "$VCS/build/$f.meta"
   done
 
-  # package.json: stamp a UPM version built from UTC wall-clock time.
-  # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
-  # ascending as time passes and stay inside the requested "0.1.x"-style
-  # 0.x.y range ("0.1" prefix kept literal, time fills the rest).
-  [ -f ./package.json ] && cp -f ./package.json "$VCS/build/package.json"
+  # =========================================================================
+  # package.json — the UPM manifest, and the ONE file that is shipped to
+  # build/ rather than rsynced (its version is rewritten on the way through).
+  #
+  # ./package.json in THIS tree is the template: a real Unity asset that Unity
+  # has imported, so package.json.meta exists and carries the GUID Unity uses
+  # for it.  The template keeps its version pinned (0.1.0) so that Unity's own
+  # view of the asset never changes and its meta never churns.
+  #
+  # build/package.json gets a fresh time-based version, and its .meta is copied
+  # from the source alongside it (see the meta loop above) so the packaged copy
+  # has the same GUID.  Without that meta Unity refuses the file:
+  #   "Asset Packages/com.nzk.toolkit/package.json has no meta file, but it's
+  #    in an immutable folder. The asset will be ignored."
+  #
+  # Version scheme: 0.1.<MMDDHHmm> with leading zeros stripped, so it is a
+  # valid semver that sorts strictly ascending as time passes.
+  # =========================================================================
   VER=""
-  if [ -f "$VCS/build/package.json" ]; then
+  if [ -f ./package.json ]; then
+    cp -f ./package.json "$VCS/build/package.json"
     STAMP=$(date -u +%m%d%H%M)
     $PY - "$VCS/build/package.json" "$STAMP" <<'EOF'
 import json, sys
@@ -160,6 +174,8 @@ EOF
     VER=$($PY -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" \
                 "$VCS/build/package.json")
     echo "versioned -> $VER"
+  else
+    echo "versioned -> SKIPPED: no ./package.json template in the Unity tree" >&2
   fi
 
   echo "mirrored -> $VCS/{source,build}"
