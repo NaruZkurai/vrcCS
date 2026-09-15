@@ -15,6 +15,25 @@ cd "$(dirname "$0")"
 
 PY=python3
 OUT=./NZK
+# Side cache for Unity-minted .meta files.  convert.py -d wipes ./NZK, which
+# would also delete the .meta Unity wrote next to each generated file, so we
+# stash them here first and put them back afterwards.  See the passthrough
+# block at the end of this script.
+META_CACHE=./.nzk-meta-cache
+
+# 0) snapshot Unity's .meta files out of ./NZK BEFORE the wipe.
+#    Unity mints these when it imports the project; they are the GUIDs every
+#    serialized reference points at, so they must survive the regen.
+#    Only .meta is captured - the .cs themselves are always regenerated.
+if [ -d "$OUT" ]; then
+  mkdir -p "$META_CACHE"
+  ( cd "$OUT" && find . -name '*.meta' -print0 ) | while IFS= read -r -d '' m; do
+    mkdir -p "$META_CACHE/$(dirname "$m")"
+    cp -f "$OUT/${m#./}" "$META_CACHE/${m#./}"
+  done
+  N=$(find "$META_CACHE" -name '*.meta' | wc -l)
+  [ "$N" -gt 0 ] && echo "metas    -> snapshotted $N unity .meta before wipe"
+fi
 
 # 1) monolith: -d wipes ./NZK, emit fresh (Core/Core.cs)
 $PY convert.py -bc -d nzktoolkit_monolith_compilable.cs.nzk -o "$OUT" -ns NZK
@@ -62,13 +81,54 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   # --delete here removes shorthand leaves that no longer exist at the source.
   "${RSYNC[@]}" ./shorthand/ "$VCS/build/shorthand/"
 
-  # Unity NEEDS the folder .meta files: without NZK.meta / shorthand.meta,
-  # Unity re-imports those folders with fresh GUIDs and every reference to
-  # them breaks.  These two come from the Unity source so they carry the REAL
-  # unity-minted guid, and are copied before the generator below (which fills
-  # in whatever is still missing, including everything convert.py emits).
+  # =========================================================================
+  # meta passthrough: build/ GETS THE REAL UNITY-MINTED .meta FILES.
+  #
+  # Unity is the only thing that mints GUIDs here.  When Unity imports
+  # `NZK-Toolkit/` it writes .meta next to every folder and file, and those
+  # GUIDs are what serialized references (scene components, prefabs, the .anim
+  # assets) point at.  So we COPY them, we never invent them.
+  #
+  # Folder metas (NZK.meta / shorthand.meta) come from the Unity source tree.
+  # Per-file metas come through the rsyncs, because shorthand/ and NZK/ are
+  # both mirrored whole.
+  #
+  # *** THE CATCH: convert.py -d shutil.rmtree's ./NZK on every run, taking
+  # Unity's freshly-written per-file .meta files with it.  That is why the
+  # source NZK tree sits at 0 metas / 222 .cs - they are deleted each sync.
+  # Step 0 at the top of this script snapshots them to $META_CACHE first; this
+  # step puts them back on top of the regenerated tree.
+  #
+  # Restore is path-keyed and only for paths that still exist after regen, so
+  # a deleted/renamed file drops its stale meta.  A rename gets a new GUID -
+  # correct, because to Unity a rename IS a new asset.
+  # =========================================================================
   [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
   [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
+  if [ -d "$META_CACHE" ]; then
+    M=0
+    ( cd "$META_CACHE" && find . -name '*.meta' -print0 ) |
+      while IFS= read -r -d '' m; do
+        [ -e "$OUT/${m#./}" ] || continue
+        cp -f "$META_CACHE/${m#./}" "$OUT/${m#./}"
+      done
+    M=$(find "$OUT" -name '*.meta' | wc -l)
+    echo "metas    -> $M unity .meta restored into $OUT"
+  else
+    echo "metas    -> none to restore; open Unity to mint them, then re-sync" >&2
+  fi
+
+  # re-mirror ONLY the metas, now that they are back on disk.
+  # (the earlier rsyncs ran before the restore; rsync -a would otherwise have
+  # deleted the target metas in build/ because ./NZK had none at that moment)
+  if [ -d "$META_CACHE" ]; then
+    ( cd "$OUT" && find . -name '*.meta' -print0 ) |
+      while IFS= read -r -d '' m; do
+        d="$VCS/build/NZK/$(dirname "${m#./}")"
+        mkdir -p "$d"
+        cp -f "$OUT/${m#./}" "$d/"
+      done
+  fi
 
   # package.json: stamp a UPM version built from UTC wall-clock time.
   # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
@@ -92,94 +152,6 @@ EOF
                 "$VCS/build/package.json")
     echo "versioned -> $VER"
   fi
-
-  # =========================================================================
-  # LAST: fill in EVERY missing .meta under build/.
-  #
-  # UPM packages are IMMUTABLE: Unity will not import anything under
-  # Packages/<name>/ that lacks a .meta, and it will not generate them either
-  # (it cannot write into the package cache).  That produced ~300 lines of
-  # "has no meta file, but it's in an immutable folder. The asset will be
-  # ignored." and the whole toolkit silently failed to import.
-  #
-  # Must run LAST: convert.py, the rsyncs, the folder-meta copies and the
-  # package.json stamp all create files, and anything created after this pass
-  # would be an orphan again.
-  #
-  # GUIDs are DETERMINISTIC (md5 of package-relative path -> 32 hex chars,
-  # which is exactly Unity's guid format).  Stability is the whole point: a
-  # random guid per sync makes Unity re-import every file and breaks every
-  # serialized reference to these scripts.  Path-keyed means a rebuild keeps
-  # its guid and a rename gets a new one (correct: a rename IS a new asset).
-  # These are NOT Unity's own hashes and don't need to be - guid uniqueness
-  # and stability is all that matters.  Already-present .meta files are never
-  # touched, so the two real folder guids above survive.
-  # =========================================================================
-  $PY - "$VCS/build" <<'EOF'
-import hashlib, os, sys
-
-root = sys.argv[1].rstrip('/')
-FOLDER = ("fileFormatVersion: 2\n"
-          "guid: {g}\n"
-          "folderAsset: yes\n"
-          "DefaultImporter:\n"
-          "  externalObjects: {{}}\n"
-          "  userData: \n"
-          "  assetBundleName: \n"
-          "  assetBundleVariant: \n")
-# plain ASSET (package.json, .nzk) = no folderAsset line, DefaultImporter
-ASSET = ("fileFormatVersion: 2\n"
-         "guid: {g}\n"
-         "DefaultImporter:\n"
-         "  externalObjects: {{}}\n"
-         "  userData: \n"
-         "  assetBundleName: \n"
-         "  assetBundleVariant: \n")
-SCRIPT = ("fileFormatVersion: 2\n"
-          "guid: {g}\n"
-          "MonoImporter:\n"
-          "  externalObjects: {{}}\n"
-          "  serializedVersion: 2\n"
-          "  defaultReferences: []\n"
-          "  executionOrder: 0\n"
-          "  icon: {{instanceID: 0}}\n"
-          "  userData: \n"
-          "  assetBundleName: \n"
-          "  assetBundleVariant: \n")
-
-def guid(rel):
-    # namespace prefix keeps these disjoint from any other hash scheme
-    return hashlib.md5(("nzk.toolkit/" + rel).encode()).hexdigest()
-
-made = 0
-for dirpath, dirnames, filenames in os.walk(root):
-    dirnames.sort(); filenames.sort()
-    rel = os.path.relpath(dirpath, root).replace(os.sep, '/')
-    # The ROOT (build/) gets NO folder meta: build/ IS the package root and the
-    # UPM manifest lives in it, so a build.meta would be an extra asset inside
-    # the package rather than a meta for it.  Its FILES still need metas
-    # (package.json, rctoan_menuItem.cs.nzk), so only the folder meta is
-    # skipped here - NOT the file loop.
-    if rel != '.':
-        mp = dirpath + '.meta'
-        if not os.path.exists(mp):
-            open(mp, 'w').write(FOLDER.format(g=guid(rel)))
-            made += 1
-    for fn in filenames:
-        if fn.endswith('.meta'):
-            continue
-        fp = os.path.join(dirpath, fn)
-        if os.path.exists(fp + '.meta'):
-            continue
-        name = fn if rel != '.' else fn
-        if fn.endswith('.cs') or fn.endswith('.cs.nzk'):
-            tpl = SCRIPT
-        else:
-            tpl = ASSET
-        open(fp + '.meta', 'w').write(tpl.format(g=guid(name)))
-        made += 1
-print("metas    -> %d written" % made)
-EOF
 
   echo "mirrored -> $VCS/{source,build}"
 
