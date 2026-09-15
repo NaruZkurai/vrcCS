@@ -1,4 +1,7 @@
-namespace NZK{public static partial class Core {public static partial class Validations
+namespace NZK
+{
+public static partial class Core {
+public static partial class Validations
 {
   public static bool HasSelectedAnimations()
   { string[] guids = UnityEditor.Selection.assetGUIDs;
@@ -12,8 +15,6 @@ namespace NZK{public static partial class Core {public static partial class Vali
     }
     return false;
   }
-
-
-
-
-}}}
+}
+}
+}

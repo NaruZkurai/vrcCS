@@ -15,7 +15,7 @@ public static partial class MenuItems
      Animation Clip, so the item shows (and is clickable) on animations. */
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", true)]
   public static bool ValidateCheckZeroScaleAnimationsAsset()
-  { return NZK.Core.MenuItems.HasSelectedAnimations(); }
+  { return NZK.Core.Validations.HasSelectedAnimations(); }
   
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void ClipScaleCheckIfZero()
