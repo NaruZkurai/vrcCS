@@ -17,7 +17,7 @@ public static class MenuItems
     if (NZK.E.D.NerrOK<System.String>(
           System.String.IsNullOrEmpty(assetPath) ? null : assetPath,
           31, 24, assetPath)) {return;}
-    string fullPath = NZK.E.PC(NZK.Core.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    string fullPath = NZK.E.PC(global::NZK.Core.ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (NZK.E.D.NerrOK<System.String>(
           System.IO.File.Exists(fullPath) ? fullPath : null,
           24, 25, fullPath)) {return;}
@@ -28,7 +28,7 @@ public static class MenuItems
     if (!hasZero)
     { NZK.E.D.OK(clip, 30, 29);
       return; }
-    if (NZK.Core.FixAnimationClipScale(clip))
+    if (global::NZK.Core.FixAnimationClipScale(clip))
     { NZK.AD.R();
       NZK.E.D.OK(clip, 29, 29); }
     else
@@ -45,7 +45,7 @@ public static class MenuItems
     if (NZK.E.D.NerrOK<System.String>(
           System.String.IsNullOrEmpty(assetPath) ? null : assetPath,
           31, 24, assetPath)) {return;}
-    string fullPath = NZK.E.PC(NZK.Core.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    string fullPath = NZK.E.PC(global::NZK.Core.ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (NZK.E.D.NerrOK<System.String>(
           System.IO.File.Exists(fullPath) ? fullPath : null,
           24, 25, fullPath)) {return;}
