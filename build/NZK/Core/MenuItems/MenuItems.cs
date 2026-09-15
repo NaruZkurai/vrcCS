@@ -35,10 +35,10 @@ public static partial class MenuItems
       System.IO.File.WriteAllText(NZK.Core.Validated.FilePath, converted);
       changed++;
     }
-    if (changed > 0) NZK.AD.R();
+    if (changed == 0) return;
+    NZK.AD.R();
     NZK.E.Dd("Fix Zero Scale Animations",
-      changed > 0 ? "Fixed " + changed + " animation clip(s)." : "No zero scale values found.",
-      "OK");
+      "Fixed " + changed + " animation clip(s).", "OK");
   }
   
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Check Zero Scale Animations", false, 31)]
