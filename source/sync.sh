@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# sync.sh — regen ./NZK/ from the five .nzk sources.  Each input is a
+# sync.sh — regen ./NZK/ from the .nzk sources.  The first five are each a
 # single `namespace NZK { ... partial class Core { ... } }`; -bc emits ONE whole
 # slice per top-level type, and since the same top-level name (`Core`) appears in
 # every input, call 1 creates Core/Core.cs and calls 2/3/4/5 (-u) append the next
 # partial segment Core/Core_p1.cs / Core/Core_p2.cs / Core/Core_p3.cs /
 # Core/Core_p4.cs.  All segments share namespace NZK + `static partial class Core`
-# so C# folds them into one type.
+# so C# folds them into one type.  Any OTHER .cs.nzk in ./ (currently
+# rctoan_menuItem.cs.nzk) is a STANDALONE source and gets its own -bc -u pass in
+# step 6, emitting NZK/<TypeName>/<TypeName>.cs from the type name inside it.
 #
 # Split of duties:  Yaml.cs.nzk = how a YAML block is made (markers, spans, type
 # tags, line/field IO).  nan.cs.nzk = how a scale value becomes NaN (detect /
@@ -42,6 +44,30 @@ $PY convert.py -bc -u Yaml.cs.nzk -o "$OUT" -ns NZK
 
 # 5) nan: -u appends its Core segment as Core/Core_p4.cs (no delete)
 $PY convert.py -bc -u nan.cs.nzk -o "$OUT" -ns NZK
+
+# 6) every OTHER .cs.nzk in ./ is a standalone source too (not a Core partial),
+#    so it cannot ride the -u append chain above: -u would name its output from
+#    the FIRST top-level type it finds and grow Core_pN, not make its own file.
+#    Each one gets its own -bc -u pass, which emits NZK/<TypeName>/<TypeName>.cs
+#    driven by the type name INSIDE the file (never by the input filename).
+#
+#    This is what was missing: rctoan_menuItem.cs.nzk used to be rsynced to
+#    build/ VERBATIM, still carrying the .nzk suffix.  Unity only compiles .cs,
+#    so the file was inert in every consuming project while the local harness
+#    (which globbed *.cs.nzk) happily linked it and reported a clean build.
+#    Parsing it here is what puts a real .cs on the wire.
+#
+#    The five inputs above are excluded by name: they already ran.  Anything
+#    else ending in .cs.nzk is discovered, so adding a new standalone source
+#    needs no edit to this script.
+for f in *.cs.nzk; do
+  [ -e "$f" ] || continue
+  case "$f" in
+    nzktoolkit_monolith_compilable.cs.nzk|rctonan.cs.nzk|NZK.Toolkit.cs.nzk|Yaml.cs.nzk|nan.cs.nzk) continue ;;
+  esac
+  echo "convert  -> $f (standalone)"
+  $PY convert.py -bc -u "$f" -o "$OUT" -ns NZK
+done
 
 echo "synced -> $(pwd)/${OUT}"
 
@@ -121,23 +147,39 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
                  --include='convert.py' --exclude='*' ./ "$VCS/source/"
 
   # build: the generated tree + the standalone menu-item source.
-  # NO --delete here: Unity writes .meta files in there after importing the
-  # package, and a delete pass would wipe GUIDs Unity just minted.  Copy in
+  # ONLY .cs and .meta travel to build/.  A .cs.nzk here would be dead weight:
+  # Unity compiles .cs exclusively, so a raw .nzk-suffixed file in the package
+  # is invisible no matter how many files it contains.  Every source is parsed
+  # by the convert passes above, so build/ holds nothing but real .cs output.
+  #
+  # NO --delete for build/: Unity writes .meta files in there after importing
+  # the package, and a delete pass would wipe GUIDs Unity just minted.  Copy in
   # only, never delete out.
-  "${RSYNC_KEEP[@]}" "$OUT/" "$VCS/build/NZK/"
-  "${RSYNC_KEEP[@]}" rctoan_menuItem.cs.nzk "$VCS/build/"
+  "${RSYNC_KEEP[@]}" --include='*/' --include='*.cs' --include='*.meta' --exclude='*' \
+                     "$OUT/" "$VCS/build/NZK/"
 
-  # shorthand is pre-leafed and NOT generated: mirror as-is (no changes).
-  # Carries its own .meta files (Unity minted them) - same no-delete rule.
-  "${RSYNC_KEEP[@]}" ./shorthand/ "$VCS/build/shorthand/"
+  # shorthand is pre-leafed, hand-written, and NOT generated: mirror as-is.
+  # It is already in final .cs form (one member per file), so it passes the
+  # same .cs-only filter.  Carries its own .meta files (Unity minted them).
+  "${RSYNC_KEEP[@]}" --include='*/' --include='*.cs' --include='*.meta' --exclude='*' \
+                     ./shorthand/ "$VCS/build/shorthand/"
 
   # Unity-minted folder + root metas: COPY the real ones, never invent a GUID.
   # Everything inside NZK/ and shorthand/ travels via the rsyncs above; these
   # are the metas for the mirrored folders themselves and for the files that
-  # live loose in build/ (the package manifest and the menu-item source).
-  for f in NZK shorthand package.json rctoan_menuItem.cs.nzk; do
+  # live loose in build/ (the package manifest).
+  for f in NZK shorthand package.json; do
     [ -f "./$f.meta" ] && cp -f "./$f.meta" "$VCS/build/$f.meta"
   done
+
+  # rctoan_menuItem.cs.nzk is deliberately NOT copied into build/ anymore.  It
+  # is parsed in step 6 above and ships as generated .cs inside NZK/MenuItems/,
+  # so shipping the raw source alongside it would double-declare NZK.MenuItems
+  # (CS0101) in any tree that compiled both.
+  # Clean up the stale copies an older sync.sh left behind, plus the meta that
+  # was hand-travelled with them - if they linger, Unity keeps importing a file
+  # whose type is now also declared by the generated tree.
+  rm -f "$VCS/build/rctoan_menuItem.cs.nzk" "$VCS/build/rctoan_menuItem.cs.nzk.meta"
 
   # =========================================================================
   # package.json — the UPM manifest, and the ONE file that is shipped to

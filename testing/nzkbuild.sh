@@ -52,10 +52,28 @@ for d in \
   [ -f "$d" ] && refs+=("-r:$d")
 done
 
-# Compile ONLY the synced mirror: generated NZK/**, pre-leafed shorthand/**,
-# and the hand-written non-sync rctoan_menuItem.cs.nzk.
-# The five .cs.nzk sync inputs are absent from build/ (they live in source/).
-srcs=$(find "$BUILD" -type f \( -name '*.cs' -o -name '*.cs.nzk' \) | sort)
+# Compile ONLY the synced mirror: generated NZK/** and pre-leafed shorthand/**.
+# Every source is parsed into real .cs before it lands in build/, so .cs is all
+# there is to compile.
+#
+# Deliberately NOT globbing *.cs.nzk.  Doing that used to link the raw copies
+# that leaked into build/, which made this harness pass on trees Unity could
+# not compile - it compiled a file Unity ignores entirely.  Matching Unity's
+# real input set (.cs only) means a convert step that fails to emit, or emits
+# under the wrong name, now fails HERE instead of silently passing and then
+# breaking in every consuming project.
+srcs=$(find "$BUILD" -type f -name '*.cs' | sort)
+
+# Fail loudly if any raw source leaked in: build/ must be output only.
+leaked=$(find "$BUILD" -type f -name '*.cs.nzk')
+if [ -n "$leaked" ]; then
+  echo "ERROR: unparsed .cs.nzk source in build/ (Unity cannot compile these):" >&2
+  echo "$leaked" >&2
+  echo "sync.sh should have parsed them into .cs - fix that, don't ignore this." >&2
+  exit 1
+fi
+
+[ -n "$srcs" ] || { echo "no .cs found under $BUILD - did sync.sh run?"; exit 1; }
 
 "$NET" "$U/DotNetSdkRoslyn/csc.dll" \
   -nologo -target:library -langversion:9 -nullable:disable -unsafe+ \
