@@ -63,25 +63,36 @@ echo "synced -> $(pwd)/${OUT}"
 # wedged pipeline, and the next run (with Unity open) fixes it.
 # `find -print -quit` (not a hardcoded filename) because the first meta Unity
 # writes is not predictable; ANY meta proves the import ran.
+#
+# Unity writes metas INCREMENTALLY, so "one appeared" is not "it finished".
+# Exiting on the first meta caught the import mid-flight (239 of 429) and
+# rsynced a half-meta'd tree.  So we wait for the count to STOP CHANGING: a
+# settled count means the import finished.  STABLE_REQ consecutive unchanged
+# polls is the settle window.
 # =========================================================================
-META_WAIT=${META_WAIT:-60}   # seconds; override via env when scripting
-have_meta() { find "$OUT" -name '*.meta' -print -quit 2>/dev/null | grep -q .; }
-if have_meta; then
-  echo "metas    -> $(find "$OUT" -name '*.meta' | wc -l) unity .meta already present"
-else
-  echo "metas    -> waiting up to ${META_WAIT}s for Unity to mint .meta..."
-  waited=0
-  while ! have_meta; do
-    if [ "$waited" -ge "$META_WAIT" ]; then
-      echo "metas    -> TIMEOUT after ${META_WAIT}s, no Unity .meta in $OUT" >&2
-      echo "metas    -> open Unity, let it refresh, then re-run ./sync.sh" >&2
-      break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  have_meta && echo "metas    -> $(find "$OUT" -name '*.meta' | wc -l) unity .meta (waited ${waited}s)"
-fi
+META_WAIT=${META_WAIT:-120}    # seconds; override via env when scripting
+STABLE_REQ=${STABLE_REQ:-3}    # consecutive identical counts = settled
+count_meta() { find "$OUT" -name '*.meta' 2>/dev/null | wc -l; }
+waited=0; last=-1; stable=0
+echo "metas    -> waiting up to ${META_WAIT}s for Unity to settle .meta..."
+while :; do
+  now=$(count_meta)
+  if [ "$now" -gt 0 ] && [ "$now" -eq "$last" ]; then
+    stable=$((stable + 1))
+    [ "$stable" -ge "$STABLE_REQ" ] && break
+  else
+    stable=0
+  fi
+  last=$now
+  if [ "$waited" -ge "$META_WAIT" ]; then
+    echo "metas    -> TIMEOUT after ${META_WAIT}s at $now .meta (not settled)" >&2
+    echo "metas    -> open Unity, let it finish importing, then re-run ./sync.sh" >&2
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+echo "metas    -> $last unity .meta settled (waited ${waited}s)"
 
 # ===========================================================================
 # Mirror out to the vrcCS working tree.
