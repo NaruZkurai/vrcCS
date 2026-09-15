@@ -73,19 +73,6 @@ public static partial class MenuItems {
     UnityEngine.Debug.Log("Fixed zero scales in: " + clip.name);
     return true;
   }
-  public static bool HasSelectedAnimations()
-  {
-    string[] guids = UnityEditor.Selection.assetGUIDs;
-    if (guids == null || guids.Length == 0) return false;
-    foreach (string guid in guids)
-    {
-      string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
-      UnityEngine.AnimationClip clip =
-        UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.AnimationClip>(path);
-      if (clip != null) return true;
-    }
-    return false;
-  }
   
   public static string ReplaceVectorScaleValue(string input)
   {
