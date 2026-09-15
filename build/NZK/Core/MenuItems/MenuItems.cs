@@ -7,6 +7,7 @@ public static partial class MenuItems
   public static void ValidateZeroScaleAnimations()
   { UnityEngine.Object selected = UnityEditor.Selection.activeObject;
     if (NZK.E.D.NerrOK(selected, 45, 10, selected)) {return;}
+    FixZeroScaleAnimations;
     UnityEngine.AnimationClip clip = selected as UnityEngine.AnimationClip;
     if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 21, 13, selected)) {return;}
     FixZeroScaleAnimations(clip);
@@ -35,6 +36,18 @@ public static partial class MenuItems
     else
     { NZK.E.D.OK(clip, 50, 47); }
   }
+  /* Enabled only when the Project/right-click selection contains an
+     Animation Clip, so the item shows (and is clickable) on animations. */
+  [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", true)]
+  public static bool ValidateCheckZeroScaleAnimationsAsset()
+  { return HasSelectedAnimations(); }
+  /* Right-click on one or more .anim clips (Project window): fixes any
+     zero-scale keyframes in every selected clip. */
+  
+  [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", true)]
+  public static bool ValidateFixZeroScaleAnimationsAsset()
+  { return HasSelectedAnimations(); }
+  
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void CheckZeroScaleAnimations()
   {

@@ -1,5 +1,7 @@
-namespace NZK{public static partial class Core {public static partial class Core 
+namespace NZK
 {
+public static partial class Core {
+public static partial class Core {
   public static System.Collections.Generic.List<UnityEngine.AnimationClip>
   AnimationClips = new System.Collections.Generic.List<UnityEngine.AnimationClip>();
   public const string ApplicationDataPath = "Assets";
@@ -8,7 +10,6 @@ namespace NZK{public static partial class Core {public static partial class Core
   public static string xn = "x" + cnan;
   public static string yn = "y" + cnan;
   public static string zn = "z" + cnan;
-
   public static bool FixAnimationClipScale(UnityEngine.AnimationClip clip)
   {
     if (clip == null) return false;
@@ -19,10 +20,8 @@ namespace NZK{public static partial class Core {public static partial class Core
       UnityEngine.Debug.LogError("File not found: " + fullPath, clip);
       return false;
     }
-
     string content = System.IO.File.ReadAllText(fullPath);
     bool wasModified = false;
-
     if (content.Contains("m_ScaleCurves:") || content.Contains("m_EditorCurves:"))
     {
       bool fixedVector = false, fixedScalar = false;
@@ -41,18 +40,15 @@ namespace NZK{public static partial class Core {public static partial class Core
           + (fixedVector && fixedScalar ? "scale+editor curves " : fixedVector ? "scale curves " : "editor curves ")
           + clip.name);
     }
-
     if (!wasModified)
     {
       UnityEngine.Debug.Log("No zero scale values found in: " + clip.name);
       return false;
     }
-
     System.IO.File.WriteAllText(fullPath, content);
     UnityEngine.Debug.Log("Fixed zero scales in: " + clip.name);
     return true;
   }
-
   public static bool HasSelectedAnimations()
   {
     string[] guids = UnityEditor.Selection.assetGUIDs;
@@ -66,10 +62,7 @@ namespace NZK{public static partial class Core {public static partial class Core
     }
     return false;
   }
-
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Fix Zero Scale Animations", false, 30)]
-
-
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void CheckZeroScaleAnimations()
   {
@@ -79,7 +72,6 @@ namespace NZK{public static partial class Core {public static partial class Core
       NZK.E.Dd("No Selection", "Select an animation clip in the Inspector or Scene.", "OK");
       return;
     }
-
     UnityEngine.AnimationClip clip = selected as UnityEngine.AnimationClip;
     if (clip == null)
     {
@@ -87,7 +79,6 @@ namespace NZK{public static partial class Core {public static partial class Core
           "Please select an Animation Clip object.", "OK");
       return;
     }
-
     string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
     string fullPath = NZK.E.PC(ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (!System.IO.File.Exists(fullPath))
@@ -95,26 +86,21 @@ namespace NZK{public static partial class Core {public static partial class Core
       NZK.E.Dd("File Not Found", "Could not read file: " + fullPath, "OK");
       return;
     }
-
     string content = System.IO.File.ReadAllText(fullPath);
     bool hasZero = content.Contains("value: {x: 0") ||
                    content.Contains("value:\\s*\\{x:\\s*0") ||
                    content.Contains(": 0, y: 0, z: 0");
-
     string message = hasZero ? "Found zero scale curves in this animation." : "No zero scale curves found.";
     NZK.E.Dd("Zero Scale Animation Check", message, "OK");
   }
-
   public static string ReplaceVectorScaleValue(string input)
   {
     if (string.IsNullOrEmpty(input)) return input;
     var regex = new System.Text.RegularExpressions.Regex(
       "value:\\s*\\{x:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*y:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*z:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*\\}",
       System.Text.RegularExpressions.RegexOptions.Multiline);
-
     return regex.Replace(input, m => "value: {x: NaN, y: NaN, z: NaN}");
   }
-
   // m_EditorCurves rows are per-axis (attribute: m_LocalScale.x/.y/.z), one curve
   // per block but consecutive x/y/z of the SAME path sit adjacent. A scale is
   // zero only when all three channels are 0 for the same key index. Scan blocks,
@@ -127,7 +113,6 @@ namespace NZK{public static partial class Core {public static partial class Core
     e0 += "  m_EditorCurves:".Length;
     int e1 = content.IndexOf("  m_FloatCurves:", e0, System.StringComparison.Ordinal);
     if (e1 < 0) e1 = content.Length;
-
     var tok = new System.Text.RegularExpressions.Regex("(?m)^  - serializedVersion: 2\n");
     var msStart = new System.Collections.Generic.List<int>();
     foreach (System.Text.RegularExpressions.Match mm in tok.Matches(content, e0))
@@ -137,7 +122,6 @@ namespace NZK{public static partial class Core {public static partial class Core
       msStart.Add(g);
     }
     if (msStart.Count == 0) return content;
-
     System.Collections.Generic.List<string> axes =
       new System.Collections.Generic.List<string>();
     System.Collections.Generic.List<string> paths =
@@ -145,7 +129,6 @@ namespace NZK{public static partial class Core {public static partial class Core
     System.Collections.Generic.List<System.Collections.Generic.List<int>>
       valStarts = new System.Collections.Generic.List<System.Collections.Generic.List<int>>();
     var valRegex = new System.Text.RegularExpressions.Regex("(?m)^\\s*value:\\s*(\\S+)");
-
     for (int i = 0; i < msStart.Count; i++)
     {
       int s = msStart[i];
@@ -163,7 +146,6 @@ namespace NZK{public static partial class Core {public static partial class Core
       }
       valStarts.Add(lineStarts);
     }
-
     var mark = new System.Collections.Generic.HashSet<int>();
     int i2 = 0;
     while (i2 + 2 < axes.Count)
@@ -186,7 +168,6 @@ namespace NZK{public static partial class Core {public static partial class Core
       i2 += 3;
     }
     if (mark.Count == 0) return content;
-
     var sb = new System.Text.StringBuilder(content);
     int[] pos = new int[mark.Count];
     mark.CopyTo(pos);
@@ -225,18 +206,11 @@ namespace NZK{public static partial class Core {public static partial class Core
     }
     return false;
   }
-
   public static FileContents GetFileContents(string path)
   {
     return new FileContents(System.IO.File.ReadAllText(path));
   }
-
-  public class FileContents
-  {
-    public string Contents { get; }
-    public FileContents(string contents) { Contents = contents; }
-  }
-
+  
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void CheckZeroScaleAnimationsAsset()
   {
@@ -246,46 +220,39 @@ namespace NZK{public static partial class Core {public static partial class Core
       NZK.E.Dd("No Selection", "Select one or more animation clip files.", "OK");
       return;
     }
-
     System.Collections.Generic.List<string> zeroScaleClips =
       new System.Collections.Generic.List<string>();
-
     foreach (string guid in guids)
     {
       string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
       UnityEngine.AnimationClip clip =
         UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.AnimationClip>(path);
       if (clip == null) continue;
-
       string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
       string fullPath = NZK.E.PC(ApplicationDataPath,
                      assetPath.Substring("Assets/".Length));
       if (!System.IO.File.Exists(fullPath)) continue;
-
       string content = System.IO.File.ReadAllText(fullPath);
       bool hasZero = content.Contains("value: {x: 0");
       if (hasZero) zeroScaleClips.Add(clip.name);
     }
-
     string message = zeroScaleClips.Count > 0
       ? string.Join("\n", zeroScaleClips)
       : "No zero scale curves found.";
     NZK.E.Dd("Zero Scale Animation Check",
         "Found zero scale curves in:\n" + message, "OK");
   }
-
   /* Enabled only when the Project/right-click selection contains an
      Animation Clip, so the item shows (and is clickable) on animations. */
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", true)]
   public static bool ValidateCheckZeroScaleAnimationsAsset()
   { return HasSelectedAnimations(); }
-
   /* Right-click on one or more .anim clips (Project window): fixes any
      zero-scale keyframes in every selected clip. */
   
-
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Fix Zero Scale Animations", true)]
   public static bool ValidateFixZeroScaleAnimationsAsset()
   { return HasSelectedAnimations(); }
 }
-}}
+}
+}
