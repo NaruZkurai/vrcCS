@@ -5,7 +5,6 @@ namespace NZK { public static partial class Core { public static partial class M
   public static void ValidateZeroScaleAnimations()
   { UnityEngine.Object selected = UnityEditor.Selection.activeObject;
     if (NZK.E.D.NerrOK(selected, 45, 10, selected)) {return;}
-    FixZeroScaleAnimations;
     UnityEngine.AnimationClip clip = selected as UnityEngine.AnimationClip;
     if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 21, 13, selected)) {return;}
     FixZeroScaleAnimations(clip);
