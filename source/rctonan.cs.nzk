@@ -85,7 +85,7 @@ namespace NZK{public static partial class Core
       return;
     }
 
-    if (FixAnimationClipScale(clip))
+    if (NZK.Core.FixAnimationClipScale(clip))
     {
       NZK.AD.R();
       NZK.E.Dd("Animation Scale Fix",

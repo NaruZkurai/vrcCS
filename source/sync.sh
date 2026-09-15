@@ -12,8 +12,33 @@
 # Split of duties:  Yaml.cs.nzk = how a YAML block is made (markers, spans, type
 # tags, line/field IO).  nan.cs.nzk = how a scale value becomes NaN (detect /
 # set-zero-only / force).  Neither knows the other's job.
+#
+# Flags:
+#   --nopush, --np   mirror + commit to the vrcCS repo, but skip the git push.
+#                    Use when you want build/ updated and versioned without
+#                    publishing a release for consuming projects to pick up.
+#                    Nothing is lost - commit still lands, push it yourself.
+#   -h, --help       usage.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# --nopush / --np: mirror + commit locally, but do NOT push to the remote.
+# Useful when you want the build/ tree updated and versioned without publishing
+# a new package for every consuming project to pick up.  Commits still happen,
+# so nothing is lost - run `git -C "$VCS" push` yourself when ready.
+NOPUSH=0
+for arg in "$@"; do
+  case "$arg" in
+    --nopush|--np) NOPUSH=1 ;;
+    -h|--help)
+      echo "usage: sync.sh [--nopush|--np]"
+      echo "  --nopush, --np   mirror + commit, but skip the git push"
+      exit 0 ;;
+    *)
+      echo "sync.sh: unknown argument '$arg' (try --help)" >&2
+      exit 2 ;;
+  esac
+done
 
 PY=python3
 OUT=./NZK
@@ -241,7 +266,11 @@ EOF
           git -C "$VCS" commit -q -m "$MSG"
       # push only if a remote is configured; tolerate offline (non-fatal so a
       # failed push never aborts a sync that otherwise succeeded).
-      if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+      # --nopush/--np stops here: the commit above still happened, we just
+      # don't publish it.  No remote check needed since we're not pushing.
+      if [ "$NOPUSH" = "1" ]; then
+        echo "committed -> $MSG (--nopush: skipped push)"
+      elif env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
              git -C "$VCS" remote | grep -q .; then
         if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
                git -C "$VCS" push -q; then

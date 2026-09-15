@@ -77,7 +77,7 @@ public static partial class Core {
           "Please select an Animation Clip object.", "OK");
       return;
     }
-    if (FixAnimationClipScale(clip))
+    if (NZK.Core.FixAnimationClipScale(clip))
     {
       NZK.AD.R();
       NZK.E.Dd("Animation Scale Fix",
