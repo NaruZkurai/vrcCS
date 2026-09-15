@@ -9,13 +9,13 @@ public static partial class MenuItems
     if (NZK.E.D.NerrOK(selected, 45, 10, selected)) {return;}
     UnityEngine.AnimationClip clip = selected as UnityEngine.AnimationClip;
     if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 21, 13, selected)) {return;}
-    NZK.Core.Menuitems.FixZeroScaleAnimations(clip);
+    NZK.Core.MenuItems.FixZeroScaleAnimations(clip);
   }
   /* Enabled only when the Project/right-click selection contains an
      Animation Clip, so the item shows (and is clickable) on animations. */
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", true)]
   public static bool ValidateCheckZeroScaleAnimationsAsset()
-  { return NZK.Core.Validations.HasSelectedAnimations(); }
+  { return NZK.Core.MenuItems.HasSelectedAnimations(); }
   
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void ClipScaleCheckIfZero()
