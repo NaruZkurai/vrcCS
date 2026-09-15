@@ -1,0 +1,13 @@
+{
+  "name": "com.nzk.toolkit",
+  "version": "0.1.0",
+  "displayName": "NZK Toolkit",
+  "description": "Tools for building and editing VRChat avatars in Unity.",
+  "keywords": [
+    "nzk",
+    "vrchat"
+  ],
+  "author": {
+    "name": "NZK"
+  }
+}
