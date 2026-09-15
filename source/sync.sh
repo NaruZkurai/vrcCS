@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# sync.sh — regen ./NZK/ from the .nzk sources.  The first five are each a
-# single `namespace NZK { ... partial class Core { ... } }`; -bc emits ONE whole
-# slice per top-level type, and since the same top-level name (`Core`) appears in
-# every input, call 1 creates Core/Core.cs and calls 2/3/4/5 (-u) append the next
-# partial segment Core/Core_p1.cs / Core/Core_p2.cs / Core/Core_p3.cs /
-# Core/Core_p4.cs.  All segments share namespace NZK + `static partial class Core`
-# so C# folds them into one type.  Any OTHER .cs.nzk in ./ (currently
-# rctoan_menuItem.cs.nzk) is a STANDALONE source and gets its own -bc -u pass in
-# step 6, emitting NZK/<TypeName>/<TypeName>.cs from the type name inside it.
+# sync.sh — regen ./NZK/ from EVERY .cs.nzk source in this folder.
+#
+# There is no hard-coded source list and no exclusion list.  Every input is
+# self-describing, and convert.py -bc names each output from the top-level type
+# INSIDE the file, so the output path is never derived from the input filename:
+#
+#   nzktoolkit_monolith_compilable.cs.nzk  -> NZK/Core/Core.cs      (first pass, -d)
+#   rctonan.cs.nzk                         -> NZK/Core/Core_p1.cs   (append)
+#   NZK.Toolkit.cs.nzk                     -> NZK/Core/Core_p2.cs   (append)
+#   Yaml.cs.nzk                            -> NZK/Core/Core_p3.cs   (append)
+#   nan.cs.nzk                             -> NZK/Core/Core_p4.cs   (append)
+#   rctoan_menuItem.cs.nzk                 -> NZK/MenuItems/MenuItems.cs
+#
+# The five Core sources fold into one `static partial class Core` because they
+# all declare that type; -u appends each as the next Core_pN segment.  A source
+# declaring a different top-level type (MenuItems) gets its own folder instead.
+# Adding, renaming, or reordering sources needs no edit here.
 #
 # Split of duties:  Yaml.cs.nzk = how a YAML block is made (markers, spans, type
 # tags, line/field IO).  nan.cs.nzk = how a scale value becomes NaN (detect /
@@ -55,44 +63,38 @@ OUT=./NZK
 # Do NOT hand-write .meta files / hash your own GUIDs here.  Unity's real ones
 # already exist on disk; the job is only to wait for and copy them.
 
-# 1) monolith: -d wipes ./NZK, emit fresh (Core/Core.cs)
-$PY convert.py -bc -d nzktoolkit_monolith_compilable.cs.nzk -o "$OUT" -ns NZK
-
-# 2) rctonan: -u appends its Core segment as Core/Core_p1.cs (no delete)
-$PY convert.py -bc -u rctonan.cs.nzk -o "$OUT" -ns NZK
-
-# 3) NZK.Toolkit: -u appends its Core segment as Core/Core_p2.cs (no delete)
-$PY convert.py -bc -u NZK.Toolkit.cs.nzk -o "$OUT" -ns NZK
-
-# 4) Yaml: -u appends its Core segment as Core/Core_p3.cs (no delete)
-$PY convert.py -bc -u Yaml.cs.nzk -o "$OUT" -ns NZK
-
-# 5) nan: -u appends its Core segment as Core/Core_p4.cs (no delete)
-$PY convert.py -bc -u nan.cs.nzk -o "$OUT" -ns NZK
-
-# 6) every OTHER .cs.nzk in ./ is a standalone source too (not a Core partial),
-#    so it cannot ride the -u append chain above: -u would name its output from
-#    the FIRST top-level type it finds and grow Core_pN, not make its own file.
-#    Each one gets its own -bc -u pass, which emits NZK/<TypeName>/<TypeName>.cs
-#    driven by the type name INSIDE the file (never by the input filename).
+# 1) ALL .cs.nzk sources in ./ are parsed, no exclusions and no ordering
+#    dependency.  Every source is self-describing: convert.py -bc names each
+#    output from the TOP-LEVEL TYPE INSIDE the file, so
+#      `namespace NZK { ... partial class Core { ... } }` -> NZK/Core/Core.cs
+#      `namespace NZK { public static class MenuItems { ... } }` -> NZK/MenuItems/MenuItems.cs
+#      `namespace NZK { class Yaml ... }`  -> NZK/Yaml/...
+#    and -u appends Core_p1/Core_p2/... when a later source declares the same
+#    top-level type (Core appears in five of them).  The FILE NAME is never used
+#    to pick the output, so there is nothing to keep in sync when sources are
+#    added, renamed, or reordered.
 #
-#    This is what was missing: rctoan_menuItem.cs.nzk used to be rsynced to
-#    build/ VERBATIM, still carrying the .nzk suffix.  Unity only compiles .cs,
-#    so the file was inert in every consuming project while the local harness
-#    (which globbed *.cs.nzk) happily linked it and reported a clean build.
-#    Parsing it here is what puts a real .cs on the wire.
+#    -d on the FIRST pass wipes ./NZK so the tree is regenerated clean (no stale
+#    leaves from a renamed/removed source); every later pass must be -u or it
+#    would wipe what the previous pass just wrote.  Bash globs already sort, so
+#    the order is deterministic.
 #
-#    The five inputs above are excluded by name: they already ran.  Anything
-#    else ending in .cs.nzk is discovered, so adding a new standalone source
-#    needs no edit to this script.
+#    Unity mints a .meta next to every file it imports, and those GUIDs are what
+#    serialized references point at, so we do NOT invent them - we wait for
+#    Unity to write them and rsync them straight through (see the gate below).
+FIRST=1
 for f in *.cs.nzk; do
   [ -e "$f" ] || continue
-  case "$f" in
-    nzktoolkit_monolith_compilable.cs.nzk|rctonan.cs.nzk|NZK.Toolkit.cs.nzk|Yaml.cs.nzk|nan.cs.nzk) continue ;;
-  esac
-  echo "convert  -> $f (standalone)"
-  $PY convert.py -bc -u "$f" -o "$OUT" -ns NZK
+  if [ "$FIRST" = "1" ]; then
+    echo "convert  -> $f (wipe + fresh)"
+    $PY convert.py -bc -d "$f" -o "$OUT" -ns NZK
+    FIRST=0
+  else
+    echo "convert  -> $f (append)"
+    $PY convert.py -bc -u "$f" -o "$OUT" -ns NZK
+  fi
 done
+[ "$FIRST" = "1" ] && echo "convert  -> no .cs.nzk sources found in $(pwd)" >&2 || true
 
 echo "synced -> $(pwd)/${OUT}"
 
