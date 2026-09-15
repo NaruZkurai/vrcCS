@@ -120,11 +120,13 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   # Carries its own .meta files (Unity minted them) - same no-delete rule.
   "${RSYNC_KEEP[@]}" ./shorthand/ "$VCS/build/shorthand/"
 
-  # Unity-minted folder metas: COPY the real ones, never invent a GUID.
-  # Everything inside NZK/ and shorthand/ gets its .meta via the rsyncs above;
-  # these two are the folder metas for the dirs themselves.
-  [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
-  [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
+  # Unity-minted folder + root metas: COPY the real ones, never invent a GUID.
+  # Everything inside NZK/ and shorthand/ travels via the rsyncs above; these
+  # are the metas for the mirrored folders themselves and for the files that
+  # live loose in build/ (the package manifest and the menu-item source).
+  for f in NZK shorthand package.json rctoan_menuItem.cs.nzk; do
+    [ -f "./$f.meta" ] && cp -f "./$f.meta" "$VCS/build/$f.meta"
+  done
 
   # package.json: stamp a UPM version built from UTC wall-clock time.
   # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
