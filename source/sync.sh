@@ -61,22 +61,26 @@ echo "synced -> $(pwd)/${OUT}"
 # and a CI job, and a git hook - forever if Unity is closed.  After the timeout
 # we warn and sync anyway: a package with stale/missing metas still beats a
 # wedged pipeline, and the next run (with Unity open) fixes it.
+# `find -print -quit` (not a hardcoded filename) because the first meta Unity
+# writes is not predictable; ANY meta proves the import ran.
 # =========================================================================
 META_WAIT=${META_WAIT:-60}   # seconds; override via env when scripting
-waited=0
-while [ ! -e "$OUT/Core/Core.cs.meta" ]; do
-  if [ "$waited" -ge "$META_WAIT" ]; then
-    echo "metas    -> TIMEOUT after ${META_WAIT}s, no Unity .meta in $OUT" >&2
-    echo "metas    -> open Unity and let it refresh, then re-run ./sync.sh" >&2
-    break
-  fi
-  [ "$waited" -eq 0 ] && echo "metas    -> waiting up to ${META_WAIT}s for Unity to mint .meta..."
-  sleep 1
-  waited=$((waited + 1))
-done
-if [ -e "$OUT/Core/Core.cs.meta" ]; then
-  M=$(find "$OUT" -name '*.meta' | wc -l)
-  echo "metas    -> $M unity .meta present (waited ${waited}s)"
+have_meta() { find "$OUT" -name '*.meta' -print -quit 2>/dev/null | grep -q .; }
+if have_meta; then
+  echo "metas    -> $(find "$OUT" -name '*.meta' | wc -l) unity .meta already present"
+else
+  echo "metas    -> waiting up to ${META_WAIT}s for Unity to mint .meta..."
+  waited=0
+  while ! have_meta; do
+    if [ "$waited" -ge "$META_WAIT" ]; then
+      echo "metas    -> TIMEOUT after ${META_WAIT}s, no Unity .meta in $OUT" >&2
+      echo "metas    -> open Unity, let it refresh, then re-run ./sync.sh" >&2
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  have_meta && echo "metas    -> $(find "$OUT" -name '*.meta' | wc -l) unity .meta (waited ${waited}s)"
 fi
 
 # ===========================================================================
