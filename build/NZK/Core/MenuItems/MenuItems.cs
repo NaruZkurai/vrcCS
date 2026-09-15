@@ -1,7 +1,7 @@
 namespace NZK
 {
 public static partial class Core {
-public static class MenuItems
+public static partial class MenuItems
 {
   [UnityEditor.MenuItem("Tools/NZK Toolkit/Fix Zero Scale Animations", false, 30)]
   public static void ValidateZeroScaleAnimations()
