@@ -29,7 +29,7 @@ public static class MenuItems
     if (!hasZero)
     { NZK.E.D.OK(clip, 30, 29);
       return; }
-    if (NZK.Core.FixAnimationClipScale(clip))
+    if (NZK.Core.MenuItems.FixAnimationClipScale(clip))
     { NZK.AD.R();
       NZK.E.D.OK(clip, 29, 29); }
     else
