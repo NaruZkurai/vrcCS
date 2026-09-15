@@ -297,13 +297,22 @@ if [ -d "$VCS/.git" ]; then
   REPO_URL=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
     git -C "$VCS" remote get-url origin 2>/dev/null || printf '%s' "$REPO_URL")
 fi
-if [ -e "$NEMESIS" ] && [ ! -d "$NEMESIS/.git" ]; then
-  echo "nemesis -> existing path is not a git checkout: $NEMESIS" >&2
-  exit 1
-elif [ -d "$NEMESIS/.git" ]; then
+if [ -d "$NEMESIS/.git" ]; then
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
     git -C "$NEMESIS" pull --ff-only
   echo "nemesis -> updated $NEMESIS"
+elif [ -e "$NEMESIS" ]; then
+  # Unity may have created the package folder before its repository checkout.
+  # Merge a fresh clone into it so unrelated Unity assets already in the folder
+  # survive, then retain the clone's .git directory for future pull runs.
+  TMP=$(mktemp -d "${NEMESIS}.clone.XXXXXX")
+  trap 'rm -rf "$TMP"' EXIT
+  git clone "$REPO_URL" "$TMP"
+  rsync -a --exclude='.git/' "$TMP/" "$NEMESIS/"
+  mv "$TMP/.git" "$NEMESIS/.git"
+  rm -rf "$TMP"
+  trap - EXIT
+  echo "nemesis -> initialized existing path $NEMESIS"
 else
   mkdir -p "$(dirname "$NEMESIS")"
   git clone "$REPO_URL" "$NEMESIS"
