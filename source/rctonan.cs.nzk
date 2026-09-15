@@ -13,7 +13,7 @@ namespace NZK{public static partial class Core {public static partial class Menu
   {
     if (clip == null) return false;
     string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-    string fullPath = NZK.E.PC(NZK.CoreMenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (!System.IO.File.Exists(fullPath))
     {
       UnityEngine.Debug.LogError("File not found: " + fullPath, clip);
@@ -223,7 +223,7 @@ namespace NZK{public static partial class Core {public static partial class Menu
       if (clip == null) continue;
 
       string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-      string fullPath = NZK.E.PC(NZK.CoreMenuItems.ApplicationDataPath,
+      string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath,
                      assetPath.Substring("Assets/".Length));
       if (!System.IO.File.Exists(fullPath)) continue;
 

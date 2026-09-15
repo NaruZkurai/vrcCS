@@ -58,7 +58,7 @@ public static partial class MenuItems
     if (NZK.E.D.NerrOK<System.String>(
           System.String.IsNullOrEmpty(assetPath) ? null : assetPath,
           31, 24, assetPath)) {return;}
-    string fullPath = NZK.E.PC(NZK.Core.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (NZK.E.D.NerrOK<System.String>(
           System.IO.File.Exists(fullPath) ? fullPath : null,
           24, 25, fullPath)) {return;}

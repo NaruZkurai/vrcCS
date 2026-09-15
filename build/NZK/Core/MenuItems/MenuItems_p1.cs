@@ -14,7 +14,7 @@ public static partial class MenuItems {
   {
     if (clip == null) return false;
     string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-    string fullPath = NZK.E.PC(NZK.CoreMenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
     if (!System.IO.File.Exists(fullPath))
     {
       UnityEngine.Debug.LogError("File not found: " + fullPath, clip);
@@ -199,7 +199,7 @@ public static partial class MenuItems {
         UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.AnimationClip>(path);
       if (clip == null) continue;
       string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-      string fullPath = NZK.E.PC(NZK.CoreMenuItems.ApplicationDataPath,
+      string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath,
                      assetPath.Substring("Assets/".Length));
       if (!System.IO.File.Exists(fullPath)) continue;
       string content = System.IO.File.ReadAllText(fullPath);
