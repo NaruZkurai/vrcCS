@@ -155,26 +155,28 @@ made = 0
 for dirpath, dirnames, filenames in os.walk(root):
     dirnames.sort(); filenames.sort()
     rel = os.path.relpath(dirpath, root).replace(os.sep, '/')
-    if rel == '.':
-        # build/ IS the package root: the UPM manifest lives there and the
-        # folder is not itself an asset inside the package, so no meta.  A
-        # meta here would be an extra asset inside the package.
-        continue
-    mp = dirpath + '.meta'
-    if not os.path.exists(mp):
-        open(mp, 'w').write(FOLDER.format(g=guid(rel)))
-        made += 1
+    # The ROOT (build/) gets NO folder meta: build/ IS the package root and the
+    # UPM manifest lives in it, so a build.meta would be an extra asset inside
+    # the package rather than a meta for it.  Its FILES still need metas
+    # (package.json, rctoan_menuItem.cs.nzk), so only the folder meta is
+    # skipped here - NOT the file loop.
+    if rel != '.':
+        mp = dirpath + '.meta'
+        if not os.path.exists(mp):
+            open(mp, 'w').write(FOLDER.format(g=guid(rel)))
+            made += 1
     for fn in filenames:
         if fn.endswith('.meta'):
             continue
         fp = os.path.join(dirpath, fn)
         if os.path.exists(fp + '.meta'):
             continue
+        name = fn if rel != '.' else fn
         if fn.endswith('.cs') or fn.endswith('.cs.nzk'):
             tpl = SCRIPT
         else:
             tpl = ASSET
-        open(fp + '.meta', 'w').write(tpl.format(g=guid(rel + '/' + fn)))
+        open(fp + '.meta', 'w').write(tpl.format(g=guid(name)))
         made += 1
 print("metas    -> %d written" % made)
 EOF
