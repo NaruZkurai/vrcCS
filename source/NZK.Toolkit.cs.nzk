@@ -1,0 +1,600 @@
+/* ==========================================================================
+ * NZK.Toolkit — Avatar-attachable component for the NZK baking pipeline.
+ * This is the ONLY file outside C_NZKToolkit_monolith_compilable.cs.
+ * All logic delegates to NZK.Core.* via fully qualified names.
+ *
+ * Bake methods are guarded with #if UNITY_EDITOR since they rely on
+ * editor-only methods in the monolith (AssetDatabase, etc.).
+ * Designed to be a ndmf and vrcfury replacement. for faster upload times :D
+ * Designed to be a ndmf and vrcfury replacement. for faster upload times :D
+ * Q: what is this ?
+ * A: Designed to be a ndmf and vrcfury replacement. for faster upload times :D
+ * faster tweaking, faster developement,
+ * VRCFURY (VF) AND NDMF (or MA) rebuilds the avatar from scratch on EVERY SINGLE BUILD
+ * but my system only updates components :D
+ * you CAN rebuild everything but once its built u can upload to like 6 different ids without having to build 6 times if you wanted
+ * Q: But if you change or add something to the Avi you would have to build it again before uploading right?
+ * A: No when you are done editing it will only update the parts that you edited and thats tracked
+ * Q: how do i merge old object references fast?
+ * A: Multiselect, right click, merge objects and optionally merge children.
+ * Q: are all the script paramiters scattered all over the place like vrcfury or modular avatar?
+ * A: Only if you want. whenever you use anything in my toolkit if it creates objects,
+ * -  it stores all your settings in a generator objectect named GEN_Avatarname,
+ * -  then you can update anything you did here
+ * Q: does this work without VF or NDMF or MA installed?
+ * A: I intend on having both Systems Convertable and even usable without them installed.
+ * - the user decides baking time
+ * ========================================================================== */
+
+namespace NZK{
+  public partial class Core{
+
+[UnityEngine.AddComponentMenu("NZK/Toolkit")]
+public class C_NZKToolkit : UnityEngine.MonoBehaviour
+{/* ── Avatar root (auto-finds from parent hierarchy) ──────────── */
+ public UnityEngine.GameObject NZKTK_AviRoot;
+
+ /* ── Higharchy Baker (C_AviGenerator) found on this or children ── */
+ public C_AviGenerator NZKTK_ScriptableComponent;
+
+ /* ── Bake toggles ────────────────────────────────────────────── */
+ public System.Boolean bakeAviRoot = true;
+ public System.Boolean bakeMesh = true;
+ public System.Boolean bakeToggles = true;
+ public System.Boolean bakeArmature = true;
+ public System.Boolean bakeControllers = true;
+
+ /* ── Read settings from existing monolith components ─────────── */
+ void ReadFromExisting()
+ { /* Sync bake toggles from AviLink if present */
+  var link = AviLinkRegistry.Get(NZKTK_AviRoot);
+  if (link != null)
+  {
+   bakeAviRoot = true;
+   bakeMesh = true;
+   bakeToggles = link.bakeToggles;
+   bakeArmature = link.bakeArmatureLinks;
+   bakeControllers = link.bakeFullController;
+  }
+  /* Sync from existing C_AviGenerator if present */
+  if (NZKTK_ScriptableComponent != null) { NZKTK_ScriptableComponent.NZKC_GO_AviRoot = NZKTK_AviRoot; }
+ }
+
+ /* ── Auto-find on Reset / Start ──────────────────────────────── */
+ void Reset()
+ {
+  if (NZKTK_AviRoot == null)
+  {
+   var t = (UnityEngine.Transform)GetComponent(typeof(UnityEngine.Transform));
+   while (t.parent != null) t = t.parent;
+   NZKTK_AviRoot = t.gameObject;
+  }
+  EnsureBaker();
+ }
+
+ /* ── Reload Higharchy Baker children ─────────────────────────── */
+ public void ReloadBaker()
+ {
+  if (NZKTK_ScriptableComponent == null)
+  {
+   NZKTK_ScriptableComponent = AviGeneratorRegistry.Get(gameObject);
+   if (NZKTK_ScriptableComponent == null) NZKTK_ScriptableComponent = AviGeneratorRegistry.Get(GetComponentInChildren<UnityEngine.Transform>());
+  }
+  if (NZKTK_ScriptableComponent != null) NZKTK_ScriptableComponent.ReloadChildren();
+ }
+
+ /* ── Ensure a Higharchy Baker on this object ─────────────────── */
+ public C_AviGenerator EnsureBaker()
+ {
+  if (NZKTK_ScriptableComponent == null) NZKTK_ScriptableComponent = AviGeneratorRegistry.Get(gameObject);
+  if (NZKTK_ScriptableComponent == null) NZKTK_ScriptableComponent = AviGeneratorRegistry.Get(GetComponentInChildren<UnityEngine.Transform>());
+  if (NZKTK_ScriptableComponent == null)
+  {
+   NZKTK_ScriptableComponent = AviGeneratorRegistry.GetOrCreate(gameObject);
+   NZKTK_ScriptableComponent.mode = E_AviGeneratorMode.This;
+   NZKTK_ScriptableComponent.NZKC_GO_AviRoot = NZKTK_AviRoot;
+   NZKTK_ScriptableComponent.ReloadChildren();
+  }
+  ReadFromExisting();
+  return NZKTK_ScriptableComponent;
+ }
+
+#if UNITY_EDITOR
+ /* ── Context menus (right-click component) ──────────────────── */
+ [UnityEngine.ContextMenu("Bake All")] public void BakeAllCtx() => BakeAll();
+ [UnityEngine.ContextMenu("Bake Avatar Root")] public void BakeAviRootCtx() => BakeAviRootOnly();
+ [UnityEngine.ContextMenu("Bake Mesh")] public void BakeMeshCtx() => BakeMeshOnly();
+ [UnityEngine.ContextMenu("Bake Armature")] public void BakeArmatureCtx() => BakeArmatureFinal();
+ [UnityEngine.ContextMenu("Bake Expression Layers")] public void BakeExprCtx() => BakeExpressionLayers();
+ [UnityEngine.ContextMenu("Bake FX Layers")] public void BakeFxCtx() => BakeFxLayers();
+ [UnityEngine.ContextMenu("Bake Toggle Generator")] public void BakeToggleCtx() => BakeToggleGenerator();
+ [UnityEngine.ContextMenu("Set Avatar Root")] public void SetRootCtx() => SetAviRoot();
+ [UnityEngine.ContextMenu("Build Avatar from Armature")] public void BuildAvCtx() => BuildAvatarFromArmature();
+
+ /* ── Component copy/paste clipboard ──────────────────────────── */
+ static UnityEngine.Component _nzkCopiedComponent;
+ static System.String _nzkCopiedComponentJson;
+ static System.String _nzkCopiedComponentType;
+
+ [UnityEditor.MenuItem("CONTEXT/Component/NZK Copy", false, 200)]
+ static void NzkCopyComponent(UnityEditor.MenuCommand cmd)
+ { var comp = cmd.context as UnityEngine.Component;
+   if (comp == null) return;
+   _nzkCopiedComponent = comp;
+   _nzkCopiedComponentType = comp.GetType().FullName;
+   _nzkCopiedComponentJson = UnityEditor.EditorJsonUtility.ToJson(comp);
+   UnityEngine.Debug.Log("[NZK] Copied " + _nzkCopiedComponentType + " from " + comp.name); }
+
+ [UnityEditor.MenuItem("CONTEXT/Component/NZK Copy", true)]
+ static bool ValidateNzkCopyComponent(UnityEditor.MenuCommand cmd)
+ { return cmd.context is UnityEngine.Component; }
+
+ /* ── GameObject context menus (right-click Hierarchy) ───────── */
+ [UnityEditor.MenuItem("GameObject/NZK/Paste Component as New", false, 31)]
+ public static void PasteComponentAsNew()
+ { if (_nzkCopiedComponent == null || string.IsNullOrEmpty(_nzkCopiedComponentJson)) { UnityEngine.Debug.LogWarning("[NZK] No component copied. Right-click a component → NZK Copy first."); return; }
+   var targets = UnityEditor.Selection.gameObjects;
+   if (targets == null || targets.Length == 0) return;
+   var type = System.Type.GetType(_nzkCopiedComponentType);
+   if (type == null) { UnityEngine.Debug.LogError("[NZK] Cannot find type: " + _nzkCopiedComponentType); return; }
+   foreach (var go in targets)
+   { if (go == null) continue;
+     var existing = go.GetComponent(type);
+     if (existing != null) { UnityEngine.Debug.Log("[NZK] " + go.name + " already has " + type.Name + " — skipped."); continue; }
+     var added = go.AddComponent(type) as UnityEngine.Component;
+     if (added != null) { UnityEditor.EditorJsonUtility.FromJsonOverwrite(_nzkCopiedComponentJson, added); UnityEditor.EditorUtility.SetDirty(go); }
+     UnityEngine.Debug.Log("[NZK] Pasted " + type.Name + " onto " + go.name); } }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Paste Component as New", true)]
+ public static System.Boolean ValidatePasteComponentAsNew()
+ { return UnityEditor.Selection.activeGameObject != null && _nzkCopiedComponent != null && !string.IsNullOrEmpty(_nzkCopiedComponentJson); }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Merge without Children to Last Selected Selected", false, 32)]
+ public static void MergeToLastSelected()
+ { var objs = UnityEditor.Selection.gameObjects;
+   if (objs == null || objs.Length < 2) return;
+   var target = objs[objs.Length - 1];
+   if (target == null) return;
+   System.Collections.Generic.List<UnityEngine.GameObject> sources = new System.Collections.Generic.List<UnityEngine.GameObject>();
+   for (int i = 0; i < objs.Length - 1; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
+   if (sources.Count == 0) return;
+   Systems.MergeObjectsToTarget(sources.ToArray(), target); }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Merge without Children to Last Selected Selected", true)]
+ public static System.Boolean ValidateMergeToLastSelected()
+ { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Merge Including Children to Last Selected", false, 31)]
+ public static void DeepMergeToLastSelected()
+ { var objs = UnityEditor.Selection.gameObjects;
+   if (objs == null || objs.Length < 2) return;
+   var target = objs[objs.Length - 1];
+   if (target == null) return;
+   System.Collections.Generic.List<UnityEngine.GameObject> sources = new System.Collections.Generic.List<UnityEngine.GameObject>();
+   for (int i = 0; i < objs.Length - 1; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
+   if (sources.Count == 0) return;
+   Systems.DeepMergeObjectsToTarget(sources.ToArray(), target); }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Merge Including Children to Last Selected", true)]
+ public static System.Boolean ValidateDeepMergeToLastSelected()
+ { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake All", false, 40)] static void BakeAllMenu() { Systems.MenuDO("Bake","All","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake All", true)] static bool ValidateBakeAllMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Mesh", false, 41)] static void BakeMeshMenu() { Systems.MenuDO("Bake","Mesh","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Mesh", true)] static bool ValidateBakeMeshMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Armature", false, 42)] static void BakeArmatureMenu() { Systems.MenuDO("Bake","Armature","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Armature", true)] static bool ValidateBakeArmatureMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Toggle Generator", false, 43)] static void BakeToggleGenMenu() { Systems.MenuDO("Bake","Toggle","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Toggle Generator", true)] static bool ValidateBakeToggleGenMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/FX Layers", false, 44)] static void BakeFxMenu() { Systems.MenuDO("Bake","Fx","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/FX Layers", true)] static bool ValidateBakeFxMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Expression Layers", false, 45)] static void BakeExprMenu() { Systems.MenuDO("Bake","Expression","",UnityEditor.Selection.gameObjects); }
+ [UnityEditor.MenuItem("GameObject/NZK/Bake/Expression Layers", true)] static bool ValidateBakeExprMenu() { return UnityEditor.Selection.activeGameObject != null; }
+
+  [UnityEditor.MenuItem("GameObject/NZK/Merge Meshes",false,47)] public static void MergeMeshesMenu() { Systems.MenuDO("Mesh","Merge","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Merge Meshes",true)] public static System.Boolean ValidateMergeMeshes() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate/Menu",false,34)] public static void GenerateMenu() { Systems.MenuDO("Generate","Menu","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate/Menu",true)] public static System.Boolean ValidateGenerateMenu() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate/DBT",false,35)] public static void GenerateDBT() { Systems.MenuDO("Generate","DBT","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate/DBT",true)] public static System.Boolean ValidateGenerateDBT() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/Blendshape",false,48)] public static void GenerateToggleBlendshape() { Systems.MenuDO("Generate","Toggle","Blendshape",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/Blendshape",true)] public static System.Boolean ValidateGenToggleBS() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/NaNimation",false,49)] public static void GenerateToggleNaN() { Systems.MenuDO("Generate","Toggle","NaN",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/NaNimation",true)] public static System.Boolean ValidateGenToggleNaN() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/On Off",false,50)] public static void GenerateToggleOnOff() { Systems.MenuDO("Generate","Toggle","onoff",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Generate Toggle/On Off",true)] public static System.Boolean ValidateGenToggleOnOff() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake SPS Sockets",false,43)] public static void BakeSpsSocketsMenu() { Systems.MenuDO("VF","BakeSps","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake SPS Sockets",true)] public static System.Boolean ValidateBakeSpsSockets() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Armature Link",false,45)] public static void BakeArmatureLinkMenu() { Systems.MenuDO("VF","BakeArmatureLink","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Armature Link",true)] public static System.Boolean ValidateBakeArmatureLink() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Full Controller",false,46)] public static void BakeFullControllerMenu() { Systems.MenuDO("VF","BakeFullController","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Full Controller",true)] public static System.Boolean ValidateBakeFullController() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake All VF")] public static void ContextBakeAllVf(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null) Systems.Baking.BakeAllVf(comp.gameObject); }
+  [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake Full Controller")] public static void ContextBakeFullController(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null && HasFeature(comp,"FullController")) Systems.Baking.BakeFullController(comp.gameObject); }
+  [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake Armature Link")] public static void ContextBakeArmatureLink(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null && HasFeature(comp,"ArmatureLink")) Systems.Baking.BakeArmatureLink(comp.gameObject); }
+  [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake Toggle")] public static void ContextBakeToggle(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null && HasFeature(comp,"Toggle")) Systems.Baking.BakeToggleFromVrcfury(comp.gameObject); }
+  static System.Boolean HasFeature(UnityEngine.MonoBehaviour comp,System.String featureName) { var features = Systems.Baking.GetFeatures(comp); if (features == null) return false; foreach (var f in features) if (f != null && (f.GetType().Name == featureName || (f.GetType().FullName ?? "").Contains(featureName))) return true; UnityEngine.Debug.Log("[Baking] This VRCFury component doesn't have a " + featureName + " feature."); return false; }
+  [UnityEditor.MenuItem("CONTEXT/VRCFuryHapticSocket/Bake SPS Socket")] public static void ContextBakeSpsSocket(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null) SpsSocketBaker.Bake(comp.gameObject); }
+  [UnityEditor.MenuItem("CONTEXT/C_NzkSpsSocket/Bake SPS Socket")] public static void ContextBakeC_NzkSpsSocket(UnityEditor.MenuCommand cmd) { var comp = cmd.context as C_NzkSpsSocket; if (comp != null) SpsSocketBaker.Bake(comp.gameObject); }
+
+  /* ── VRCFury script GUIDs for missing-script identification ── */
+  static readonly System.Collections.Generic.Dictionary<System.String,System.String> VfGuids = new()
+  { {"703106f8586c4f64b5aa39b6b4676684","HapticSocket"},
+    {"2d4cd252f8c146639507ecd55bc2b48a","HapticPlug"},
+    {"d9e94e501a2d4c95bff3d5601013d923","MainVRCFury"},
+    {"f70fb861c8004cd4b5af94fd3fd7da0e","HapticTouchReceiver"},
+    {"26089cfa1cdd4901ad7650f312669353","HapticTouchSender"},
+    {"c87b57302b5d4e1bb6519405620b239c","VRCFuryComponent"},
+    {"8028d33728ef49f5b9d44b564480aeff","GlobalCollider"},
+    {"973a3360b5c04a279549138b3d548290","HideGizmo"},
+    {"325fd324ef90492c8b08804b6f62cc0d","NoUpdateWhenOffscreen"},
+    {"87a8ddd6c72c4860af91d53d67f5955e","PlayComponent"},
+    {"a93df76833a04889b400fea362da558c","SocketGizmo"},
+    {"62488ce102aa93e4b82c4e864ce2d8f4","SpsGreenScreenFix"} };
+
+  /* ── Convert VRCFury SPS → NZK (preserves serialized data) ── */
+  static void CopySpsProperties(UnityEngine.Component oldComp,C_NzkSpsSocket nzk)
+  { var so=new UnityEditor.SerializedObject(oldComp);
+    var fields=new[]{"name","oscId","enableHandTouchZone2","length","unitsInMeters","addMenuItem","enableAuto","position","rotation","addLight","useHipAvoidance","enablePlugLengthParameter","plugLengthParameterName","enablePlugWidthParameter","plugWidthParameterName"};
+    var nso=new UnityEditor.SerializedObject(nzk); nso.Update();
+    foreach(var f in fields)
+    { var sp=so.FindProperty(f); if(sp==null)continue;
+      var np=nso.FindProperty(f); if(np==null)continue;
+      switch(sp.propertyType)
+      { case UnityEditor.SerializedPropertyType.String: np.stringValue=sp.stringValue; break;
+        case UnityEditor.SerializedPropertyType.Float: np.floatValue=sp.floatValue; break;
+        case UnityEditor.SerializedPropertyType.Integer: np.intValue=sp.intValue; break;
+        case UnityEditor.SerializedPropertyType.Boolean: np.boolValue=sp.boolValue; break;
+        case UnityEditor.SerializedPropertyType.Enum: np.enumValueIndex=sp.enumValueIndex; break;
+        case UnityEditor.SerializedPropertyType.Vector3: np.vector3Value=sp.vector3Value; break; } }
+    nso.ApplyModifiedProperties(); if(System.String.IsNullOrEmpty(nzk.name))nzk.name=nzk.gameObject.name; }
+
+  [UnityEditor.MenuItem("CONTEXT/VRCFuryHapticSocket/Convert to NZK SPS Socket",false,199)]
+  public static void ContextConvertVfToNzk(UnityEditor.MenuCommand cmd)
+  { var oldComp = cmd.context as UnityEngine.MonoBehaviour; if (oldComp == null) return;
+    var go = oldComp.gameObject; if (go == null) return;
+    if (go.GetComponent<C_NzkSpsSocket>() != null)
+    { UnityEngine.Debug.LogWarning("[NZK] Convert: Already has NZK SPS Socket. Remove it first."); return; }
+    var nzk = go.AddComponent<C_NzkSpsSocket>();
+    CopySpsProperties(oldComp,nzk);
+    UnityEditor.Undo.RegisterCreatedObjectUndo(nzk,"Convert to NZK SPS Socket");
+    UnityEditor.Undo.DestroyObjectImmediate(oldComp);
+    EnsureSpsGenerator(go);
+    SpsSocketBaker.BakeSingle(go);
+    UnityEngine.Debug.Log("[NZK] Converted on " + go.name + " \u2192 C_NzkSpsSocket"); }
+
+  [UnityEditor.MenuItem("CONTEXT/VRCFuryHapticSocket/Convert to NZK SPS Socket",true)]
+  public static System.Boolean ValidateContextConvertVfToNzk(UnityEditor.MenuCommand cmd)
+  { var c = cmd.context as UnityEngine.Component; return c != null && c.gameObject != null; }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Convert VRCFury Scripts to NZK",false,29)]
+  public static void ConvertVfScriptsOnSelection()
+  { var objs = UnityEditor.Selection.gameObjects; if (objs == null || objs.Length == 0) return;
+    int n = 0; var done = new System.Collections.Generic.HashSet<UnityEngine.GameObject>();
+    foreach (var go in objs)
+    { if (go == null) continue;
+      /* Phase 1: Known VF types (VRCFury installed) */
+      var allComps = go.GetComponentsInChildren<UnityEngine.MonoBehaviour>(true);
+      foreach (var c in allComps)
+      { if (c == null) continue; if (done.Contains(c.gameObject)) continue;
+        var fn = c.GetType().FullName ?? "";
+        if (!fn.Contains("VRCFury") && !fn.StartsWith("VF.")) continue;
+        done.Add(c.gameObject);
+        if (fn.Contains("HapticSocket") || c.GetType().Name.Contains("HapticSocket"))
+        { /* Socket → convert to C_NzkSpsSocket */
+          if (c.gameObject.GetComponent<C_NzkSpsSocket>() == null)
+          { var nzk = c.gameObject.AddComponent<C_NzkSpsSocket>();
+            CopySpsProperties(c,nzk);
+            UnityEditor.Undo.RegisterCreatedObjectUndo(nzk,"Convert VF\u2192NZK");
+            EnsureSpsGenerator(c.gameObject); SpsSocketBaker.BakeSingle(c.gameObject); n++; }
+          UnityEditor.Undo.DestroyObjectImmediate(c); }
+        else
+        { /* Route all other VF components to NZK equivalents or backup */
+          var vfType = c.GetType().Name;
+          VfConversion.ConvertOrBackup(c.gameObject,c,vfType);
+          n++; } }
+      /* Phase 2: Missing scripts (VF not installed) - detect by serialized JSON */
+      var allChildren = go.GetComponentsInChildren<UnityEngine.Transform>(true);
+      foreach (var t in allChildren)
+      { if (t == null || done.Contains(t.gameObject)) continue;
+        if (t.gameObject.GetComponent<C_NzkSpsSocket>() != null) continue;
+        var comps = t.gameObject.GetComponents<UnityEngine.Component>();
+        bool hasMissing = false;
+        foreach (var comp in comps) { if (comp == null) { hasMissing = true; break; } }
+        if (!hasMissing) continue;
+        var json = UnityEditor.EditorJsonUtility.ToJson(t.gameObject);
+        if (string.IsNullOrEmpty(json)) continue;
+        System.String vfType = null;
+        foreach (var kv in VfGuids)
+        { if (json.Contains(kv.Key)) { vfType = kv.Value; break; } }
+        if (vfType == null) continue;
+        UnityEngine.Debug.Log("[NZK] Detected missing VF: " + vfType + " on " + t.gameObject.name);
+        if (vfType != "HapticSocket" && vfType != "HapticPlug")
+        { var folder = VfConversion.StorageRoot + "/" + Vars.Names.Sanitize(t.root.name) + "/" + VfConversion.VfBackupFolder;
+          Systems.Folder.Ensure(folder);
+          var safe = Vars.Names.Sanitize(t.gameObject.name) + "_" + vfType;
+          var path = folder + "/" + safe + ".json";
+          System.String pGuid = "";
+          if (UnityEditor.PrefabUtility.IsPartOfPrefabInstance(t.gameObject))
+          { var pRoot = UnityEditor.PrefabUtility.GetNearestPrefabInstanceRoot(t.gameObject);
+            if (pRoot != null) { var prefab = UnityEditor.PrefabUtility.GetCorrespondingObjectFromSource(pRoot);
+              if (prefab != null) { var pp = UnityEditor.AssetDatabase.GetAssetPath(prefab);
+                pGuid = UnityEditor.AssetDatabase.GUIDFromAssetPath(pp).ToString(); } } }
+          var header = "# PREFAB_GUID:" + pGuid + "\n# OBJECT:" + t.gameObject.name + "\n# TYPE:" + vfType + "\n";
+          System.IO.File.WriteAllText(path,header + json); UnityEditor.AssetDatabase.Refresh();
+          UnityEngine.Debug.Log("[NZK] Backed up missing VF: " + vfType + " on " + t.gameObject.name + " → " + path + " (prefab: " + (pGuid != "" ? pGuid : "none") + ")");
+          UnityEditor.GameObjectUtility.RemoveMonoBehavioursWithMissingScript(t.gameObject); n++; done.Add(t.gameObject); continue; }
+        /* Socket/Plug → add C_NzkSpsSocket, extract values from JSON */
+        var nzk = t.gameObject.AddComponent<C_NzkSpsSocket>();
+        /* Extract values from JSON (basic parsing for common fields) */
+        try
+        { if (json.Contains("\"addLight\":")) { var idx = json.IndexOf("\"addLight\":"); var val = json.Substring(idx + 11); val = val.Substring(0,val.IndexOf(',')).Trim(); int.TryParse(val,out int al); if (al>=0&&al<=4) nzk.V_addLight=(C_NzkSpsSocket.E_AddLight)al; }
+          if (json.Contains("\"name\":\"")) { var idx=json.IndexOf("\"name\":\""); var val=json.Substring(idx+8); val=val.Substring(0,val.IndexOf('\"')); if(!string.IsNullOrEmpty(val))nzk.name=val; }
+          if (json.Contains("\"oscId\":\"")) { var idx=json.IndexOf("\"oscId\":\""); var val=json.Substring(idx+9); val=val.Substring(0,val.IndexOf('\"')); nzk.oscId=val; }
+          if (json.Contains("\"length\":")) { var idx=json.IndexOf("\"length\":"); var val=json.Substring(idx+9); val=val.Substring(0,val.IndexOf(',')); float.TryParse(val,out nzk.length); }
+          if (json.Contains("\"enableAuto\"")) nzk.enableAuto=true;
+          if (json.Contains("\"addMenuItem\"")) nzk.addMenuItem=true; }
+        catch { /* JSON parse errors are non-fatal */ }
+        if (System.String.IsNullOrEmpty(nzk.name)) nzk.name=t.gameObject.name;
+        UnityEditor.Undo.RegisterCreatedObjectUndo(nzk,"Convert missing\u2192NZK");
+        UnityEditor.GameObjectUtility.RemoveMonoBehavioursWithMissingScript(t.gameObject);
+        EnsureSpsGenerator(t.gameObject); SpsSocketBaker.BakeSingle(t.gameObject); n++; done.Add(t.gameObject); }
+      /* Phase 3: Already-baked VF sockets — find the socket ROOT by looking for SPS contact senders and walking up to the parent container */
+      var allChildren3 = go.GetComponentsInChildren<UnityEngine.Transform>(true);
+      foreach (var t in allChildren3)
+      { if (t == null || done.Contains(t.gameObject)) continue;
+        /* Check for VRCContactSender with SPS-specific tags */
+        bool hasSpsTag = false;
+        foreach (var cs in t.gameObject.GetComponents<VRC.SDK3.Dynamics.Contact.Components.VRCContactSender>())
+        { if (cs == null || cs.collisionTags == null) continue;
+          foreach (var tag in cs.collisionTags)
+          { if (!string.IsNullOrEmpty(tag) && (tag.StartsWith("SPSLL_") || tag.StartsWith("TPS_") || tag.StartsWith("DPS_")))
+            { hasSpsTag = true; break; } }
+          if (hasSpsTag) break; }
+        if (!hasSpsTag) continue;
+        /* Walk up past group containers (Senders, Lights, etc.) to find the actual socket root */
+        var socketRoot = t.parent;
+        while (socketRoot != null && (socketRoot.name == "Senders" || socketRoot.name == "Lights" || socketRoot.name == "Envelope"))
+          socketRoot = socketRoot.parent;
+        if (socketRoot == null || done.Contains(socketRoot.gameObject)) continue;
+        if (socketRoot.GetComponent<C_NzkSpsSocket>() != null) continue;
+        /* Verify this parent looks like a baked socket container (has children named like Sender/Root/Front/Length) */
+        int vfChildCount = 0;
+        for (int i = 0; i < socketRoot.childCount; i++)
+        { var cn = socketRoot.GetChild(i).name;
+          if (cn.Contains("Sender") || cn == "Root" || cn == "Front" || cn == "Length" || cn == "WidthHelper" || cn == "Envelope")
+            vfChildCount++; }
+        if (vfChildCount < 2) continue; /* Need at least 2 VF-like children to be a socket root */
+        UnityEngine.Debug.Log("[NZK] Found baked VF socket root: " + socketRoot.name);
+        var nzk = socketRoot.gameObject.AddComponent<C_NzkSpsSocket>();
+        nzk.name = socketRoot.name;
+        UnityEditor.Undo.RegisterCreatedObjectUndo(nzk,"Detect baked VF\u2192NZK");
+        EnsureSpsGenerator(socketRoot.gameObject); SpsSocketBaker.BakeSingle(socketRoot.gameObject); n++; done.Add(socketRoot.gameObject); } }
+    if (n > 0) UnityEngine.Debug.Log("[NZK] Convert VF Scripts: Converted/removed " + n + " VRCFury component(s).");
+    else UnityEngine.Debug.Log("[NZK] No VRCFury SPS sockets found on selection."); }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Convert VRCFury Scripts to NZK",true)]
+  public static System.Boolean ValidateConvertVfScriptsOnSelection() { return UnityEditor.Selection.activeGameObject != null; }
+
+  /* ── Native SPS (no VRCFury required) ───────────────────────── */
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Create Socket",false,30)]
+  public static void CreateSpsSocket()
+  { var objs = UnityEditor.Selection.gameObjects; if (objs == null || objs.Length == 0) return;
+    int n = 0;
+    foreach (var go in objs) { if (go == null) continue;
+      var child = new UnityEngine.GameObject(go.name + "_SPS_Socket");
+      child.transform.SetParent(go.transform,false);
+      UnityEditor.Undo.RegisterCreatedObjectUndo(child,"Create SPS Socket child");
+      var socket = child.AddComponent<C_NzkSpsSocket>();
+      socket.name = child.name; socket.enableAuto = true; socket.V_addLight = C_NzkSpsSocket.E_AddLight.Auto;
+      EnsureSpsGenerator(go);
+      SpsSocketBaker.BakeSingle(child); n++;
+      UnityEngine.Debug.Log("[NZK] SPS Socket created as child of " + go.name); }
+    if (n > 0) { var root = objs[0].transform.root.name; var an = Vars.Names.Sanitize(root);
+      UnityEngine.Debug.Log("[NZK] SPS Socket Created: " + n + " socket(s) on \"" + root + "\"."); } }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Create Socket",true)]
+  public static System.Boolean ValidateCreateSpsSocket() { return UnityEditor.Selection.activeGameObject != null; }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Create Plug",false,31)]
+  public static void CreateSpsPlug()
+  { var objs = UnityEditor.Selection.gameObjects; if (objs == null || objs.Length == 0) return;
+    int n = 0;
+    foreach (var go in objs) { if (go == null) continue;
+      var child = new UnityEngine.GameObject(go.name + "_SPS_Plug");
+      child.transform.SetParent(go.transform,false);
+      UnityEditor.Undo.RegisterCreatedObjectUndo(child,"Create SPS Plug child");
+      var plug = child.AddComponent<C_NzkSpsSocket>();
+      plug.name = child.name; plug.enableAuto = false; plug.V_addLight = C_NzkSpsSocket.E_AddLight.None;
+      plug.length = 0.1f; plug.position = new UnityEngine.Vector3(0,0,0.05f);
+      EnsureSpsGenerator(go);
+      SpsSocketBaker.BakeSingle(child); n++;
+      UnityEngine.Debug.Log("[NZK] SPS Plug created as child of " + go.name); }
+    if (n > 0) { var root = objs[0].transform.root.name; var an = Vars.Names.Sanitize(root);
+      UnityEngine.Debug.Log("[NZK] SPS Plug Created: " + n + " plug(s) on \"" + root + "\"."); } }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Create Plug",true)]
+  public static System.Boolean ValidateCreateSpsPlug() { return UnityEditor.Selection.activeGameObject != null; }
+
+  /* ── Ensure an SPS Socket Generator exists for the avatar ── */
+  static void EnsureSpsGenerator(UnityEngine.GameObject go)
+  { if (go == null || go.transform == null) { UnityEngine.Debug.LogWarning("[NZK] Cannot create SPS generator — null target"); return; }
+    var avatarRoot = go.transform.root.gameObject;
+    if (avatarRoot == null) { UnityEngine.Debug.LogWarning("[NZK] Cannot create SPS generator — no avatar root for " + go.name); return; }
+    var avatarName = Vars.Names.Sanitize(avatarRoot.name);
+    var genRoot = Systems.Baking.GetGenRoot(avatarName,avatarRoot);
+    if (genRoot == null) { UnityEngine.Debug.LogWarning("[NZK] Cannot create SPS generator — no gen root for " + avatarName); return; }
+    var spsChild = genRoot.Find("SPS GENERATOR");
+    if (spsChild == null) { var g = new UnityEngine.GameObject("SPS GENERATOR"); g.transform.SetParent(genRoot,false); spsChild = g.transform; }
+    var gen = spsChild.GetComponent<C_SpsSocketGenerator>();
+    if (gen == null) { gen = spsChild.gameObject.AddComponent<C_SpsSocketGenerator>(); gen.avatarName = avatarName; gen.outputFolder = "Assets/!_NZK_Generated"; }
+    UnityEngine.Debug.Log("[NZK] SPS Generator ready for " + avatarName + " at " + genRoot.name); }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Bake",false,32)]
+  public static void BakeSpsNative() { Systems.MenuDO("SPS","Bake","",UnityEditor.Selection.gameObjects); }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Bake",true)]
+  public static System.Boolean ValidateBakeSpsNative() { return UnityEditor.Selection.activeGameObject != null; }
+
+  /* ── SPS Prefab cache ops ── */
+  [UnityEditor.MenuItem("CONTEXT/C_NzkSpsSocket/Clear Prefab Cache",false,200)]
+  public static void ClearSpsSocketCache(UnityEditor.MenuCommand cmd)
+  { var socket = cmd.context as C_NzkSpsSocket; if (socket == null) return;
+    var gen = socket.GetComponentInParent<C_SpsSocketGenerator>();
+    if (gen == null) { UnityEngine.Debug.Log("[NZK] No generator found for " + socket.name); return; }
+    var safe = Vars.Names.Sanitize(socket.name);
+    var cached = gen.PrefabsRoot.Find(safe);
+    if (cached != null) { UnityEngine.Object.DestroyImmediate(cached.gameObject); UnityEngine.Debug.Log("[NZK] Cleared prefab cache for " + socket.name); }
+    UnityEngine.Debug.Log("[NZK] SPS Cache: Cleared cached prefab for " + socket.name + "."); }
+
+  [UnityEditor.MenuItem("CONTEXT/C_NzkSpsSocket/Clear Prefab Cache",true)]
+  public static System.Boolean ValidateClearSpsSocketCache(UnityEditor.MenuCommand cmd)
+  { return cmd.context is C_NzkSpsSocket; }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Clear All Prefab Caches",false,33)]
+  public static void ClearAllSpsCaches()
+  { var generators = UnityEngine.Resources.FindObjectsOfTypeAll<C_SpsSocketGenerator>();
+    int n = 0;
+    foreach (var gen in generators)
+    { if (gen == null || gen.gameObject == null || !gen.gameObject.scene.isLoaded) continue;
+      var p = gen.PrefabsRoot; for (int i = p.childCount - 1; i >= 0; i--) { UnityEngine.Object.DestroyImmediate(p.GetChild(i).gameObject); n++; } }
+    UnityEngine.Debug.Log("[NZK] Cleared " + n + " SPS prefab cache(s).");
+    UnityEngine.Debug.Log("[NZK] SPS Cache: Cleared " + n + " cached prefab(s)."); }
+
+  [UnityEditor.MenuItem("GameObject/NZK/SPS/Clear All Prefab Caches",true)]
+  public static System.Boolean ValidateClearAllSpsCaches() { return true; }
+
+  static C_NZKToolkit FindToolkit() { var sel = UnityEditor.Selection.activeGameObject; return sel != null ? sel.GetComponent<C_NZKToolkit>() : null; }
+
+ /* ── Bake entry points (editor-only) ─────────────────────────── */
+ public void BakeAll()
+ {if (!Validate()) return;
+ AVController.BakeAll(NZKTK_ScriptableComponent);}
+
+ public void BakeAviRootOnly()
+ {if (!Validate()) return;
+ AVController.BakeAviRoot(NZKTK_ScriptableComponent);}
+
+ public void BakeMeshOnly()
+ {if (!Validate()) return;
+ MergeCore.BakeMesh(NZKTK_ScriptableComponent);}
+
+ public void BakeExpressionLayers()
+ {if (!Validate()) return;
+ AVController.BakeExpressionLayers(NZKTK_ScriptableComponent);}
+
+ public void BakeFxLayers()
+ {if (!Validate()) return;
+ AVController.BakeFxLayers(NZKTK_ScriptableComponent);}
+
+ public void BakeToggleGenerator()
+ {if (!Validate()) return;
+ AVController.BakeToggleGenerator(NZKTK_ScriptableComponent);}
+
+ public void SetAviRoot()
+ {if (!Validate()) return;
+ AVController.SetAviRoot(NZKTK_ScriptableComponent);}
+
+ public void BuildAvatarFromArmature()
+ {if (!Validate()) return;
+ AVController.BuildAvatarFromArmature(NZKTK_ScriptableComponent);}
+
+ public void ResetTransforms()
+ {if (!Validate()) return;
+ AVController.ResetTransforms(NZKTK_ScriptableComponent);}
+
+ public void BakeArmatureFinal()
+ {if (!Validate()) return;
+ AVController.BakeArmatureFinal(NZKTK_ScriptableComponent);}
+#endif
+
+ /* ── Validation ──────────────────────────────────────────────── */
+ System.Boolean Validate()
+ {
+  if (NZKTK_ScriptableComponent == null) { UnityEngine.Debug.LogWarning("[C_NZKToolkit] No Higharchy Baker found. Click 'Ensure Baker' first."); return false; }
+  if (NZKTK_AviRoot == null) { UnityEngine.Debug.LogWarning("[C_NZKToolkit] No avatar root set."); return false; }
+  return true;
+ }
+}
+
+#if UNITY_EDITOR
+[UnityEditor.CustomEditor(typeof(C_NZKToolkit))]
+public class C_NZKToolkitEditor : UnityEditor.Editor
+{C_NZKToolkit _t;
+UnityEditor.SerializedProperty _spBaker;
+UnityEditor.Editor _bakerEditor;
+
+void OnEnable()
+{_t = (C_NZKToolkit)target;
+_spBaker = serializedObject.FindProperty("NZKTK_ScriptableComponent");}
+
+void EnsureBakerEditor()
+{if (_t.NZKTK_ScriptableComponent == null) { _bakerEditor = null; return; }
+if (_bakerEditor == null || _bakerEditor.target != _t.NZKTK_ScriptableComponent)
+{_bakerEditor = null;
+UnityEditor.Editor.CreateCachedEditor(_t.NZKTK_ScriptableComponent,null,ref _bakerEditor);}}
+
+public override void OnInspectorGUI()
+{if (_t == null) return;
+serializedObject.Update();
+EnsureBakerEditor();
+
+/* ── Avatar Root ── */
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("NZKTK_AviRoot"),new UnityEngine.GUIContent("Avatar Root"));
+
+/* ── Baker component ── */
+UnityEditor.EditorGUILayout.BeginHorizontal();
+UnityEditor.EditorGUILayout.PropertyField(_spBaker,new UnityEngine.GUIContent("Higharchy Baker"));
+if (UnityEngine.GUILayout.Button("Auto-Create",UnityEngine.GUILayout.Width(85)))
+{_t.EnsureBaker();UnityEditor.EditorUtility.SetDirty(_t);EnsureBakerEditor();}
+UnityEditor.EditorGUILayout.EndHorizontal();
+
+/* ── Draw the full C_AviGenerator inspector (cached editor) ── */
+if (_bakerEditor != null)
+{UnityEditor.EditorGUILayout.Space(4);
+_bakerEditor.OnInspectorGUI();}
+else
+{UnityEditor.EditorGUILayout.HelpBox("No Higharchy Baker. Click Auto-Create to add one.",UnityEditor.MessageType.Warning);}
+
+/* ── Bake toggles ── */
+UnityEditor.EditorGUILayout.Space(4);
+UnityEditor.EditorGUILayout.LabelField("── Bake Options ──",UnityEditor.EditorStyles.boldLabel);
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeAviRoot"),new UnityEngine.GUIContent("Bake Avatar Root"));
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeMesh"),new UnityEngine.GUIContent("Bake Mesh"));
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeToggles"),new UnityEngine.GUIContent("Bake Toggles"));
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeArmature"),new UnityEngine.GUIContent("Bake Armature"));
+UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeControllers"),new UnityEngine.GUIContent("Bake Controllers"));
+
+serializedObject.ApplyModifiedProperties();}}
+#endif
+/* Expected User flow *\
+* multiselect two objects right click, merge with children
+* - unpacks first selected objects (if required),
+* - replaces all references to target object's in the scene with the current ones
+* - if there is any animations that target  that object specifically it duplicates thoes animations and regargets them
+* - all script components get coppied as new, then updated, if theres a conflict it should ask the user to override or add as a new component with references. (should still turn all references to that object regardless)
+*
+* Select any object with VF sockets, right-click → NZK → SPS → Convert VRCFury Sockets to NZK, and each one gets:
+*
+*
+* Component converted (VF → C_NzkSpsSocket with all serialized data)
+* Generator created/connected (GEN_{avatar} → SPS GENERATOR)
+* Config created under the generator
+* Baked hierarchy + prefab generated
+* FX controller merged if has linked controller
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*/}}

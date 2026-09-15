@@ -1,0 +1,7 @@
+# Compiled output from testig/nzkbuild.sh
+*.dll
+*.pdb
+testig/*.runtimeconfig.json
+
+# Unity meta files — the mirror strips these, so never track them
+*.meta

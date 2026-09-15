@@ -1,1 +1,0 @@
-public static partial class NZK{public static bool NoE(string a){return string.IsNullOrEmpty(a);}}

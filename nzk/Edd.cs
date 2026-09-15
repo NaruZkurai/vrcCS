@@ -1,1 +1,0 @@
-public static partial class NZK{public static void Edd(string title, string message, string ok){UnityEditor.EditorUtility.DisplayDialog(title, message, ok);return;}}
