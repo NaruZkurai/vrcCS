@@ -288,3 +288,24 @@ EOF
     fi
   fi
 fi
+
+# Keep the Nemesis project pointed at the same package repository.  Clone it
+# on first use; later runs only fast-forward it so local changes are preserved.
+NEMESIS=/nzk/unity/vrc/Nemesis Main/Assets/NZK toolkit v6
+REPO_URL="https://github.com/NaruZkurai/vrcCS.git"
+if [ -d "$VCS/.git" ]; then
+  REPO_URL=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    git -C "$VCS" remote get-url origin 2>/dev/null || printf '%s' "$REPO_URL")
+fi
+if [ -e "$NEMESIS" ] && [ ! -d "$NEMESIS/.git" ]; then
+  echo "nemesis -> existing path is not a git checkout: $NEMESIS" >&2
+  exit 1
+elif [ -d "$NEMESIS/.git" ]; then
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    git -C "$NEMESIS" pull --ff-only
+  echo "nemesis -> updated $NEMESIS"
+else
+  mkdir -p "$(dirname "$NEMESIS")"
+  git clone "$REPO_URL" "$NEMESIS"
+  echo "nemesis -> cloned $NEMESIS"
+fi
