@@ -27,10 +27,13 @@ META_CACHE=./.nzk-meta-cache
 #    Only .meta is captured - the .cs themselves are always regenerated.
 if [ -d "$OUT" ]; then
   mkdir -p "$META_CACHE"
-  ( cd "$OUT" && find . -name '*.meta' -print0 ) | while IFS= read -r -d '' m; do
-    mkdir -p "$META_CACHE/$(dirname "$m")"
-    cp -f "$OUT/${m#./}" "$META_CACHE/${m#./}"
-  done
+  # iterate with `find .` from inside $OUT so paths are tree-relative
+  # (`./Core/X.cs.meta`); strip the leading `./` for the cache-relative copy.
+  while IFS= read -r -d '' m; do
+    rel="${m#./}"
+    mkdir -p "$META_CACHE/$(dirname "$rel")"
+    cp -f "$OUT/$rel" "$META_CACHE/$rel"
+  done < <(cd "$OUT" && find . -name '*.meta' -print0)
   N=$(find "$META_CACHE" -name '*.meta' | wc -l)
   [ "$N" -gt 0 ] && echo "metas    -> snapshotted $N unity .meta before wipe"
 fi
@@ -110,10 +113,14 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
     # `find | while`, so the counter survives (a piped while runs in a subshell
     # and any variable set inside it is lost - that is why this used to report
     # "0 restored" even when it had restored hundreds).
+    # NOTE: iterate with `find .` from INSIDE the cache so every path is
+    # cache-relative (`./Core/X.cs.meta`); stripping the leading `./` then
+    # yields a tree-relative path that maps 1:1 onto $OUT.
     R=0
     while IFS= read -r -d '' m; do
-      [ -e "$OUT/${m#./}" ] || continue
-      cp -f "$META_CACHE/${m#./}" "$OUT/${m#./}"
+      rel="${m#./}"
+      [ -e "$OUT/$rel" ] || continue
+      cp -f "$META_CACHE/$rel" "$OUT/$rel"
       R=$((R + 1))
     done < <(cd "$META_CACHE" && find . -name '*.meta' -print0)
     echo "metas    -> $R unity .meta restored into $OUT"
@@ -123,9 +130,10 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
     # already removed the target metas to match a then-meta-less ./NZK)
     C=0
     while IFS= read -r -d '' m; do
-      d="$VCS/build/NZK/$(dirname "${m#./}")"
+      rel="${m#./}"
+      d="$VCS/build/NZK/$(dirname "$rel")"
       mkdir -p "$d"
-      cp -f "$OUT/${m#./}" "$d/"
+      cp -f "$OUT/$rel" "$d/"
       C=$((C + 1))
     done < <(cd "$OUT" && find . -name '*.meta' -print0)
     echo "metas    -> $C mirrored into build/NZK/"
