@@ -1,3 +1,9 @@
+#How to add to vrchat
+in unity go to window>package manager>+ button at the top left>add package from git url
+then paste this:
+```bash
+https://github.com/NaruZkurai/vrcCS.git?path=/build
+```
 # vrcCS — NZK Toolkit working mirror
 
 Read-only mirror of the Unity project's NZK toolkit, plus the test harness.
