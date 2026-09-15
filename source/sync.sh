@@ -69,6 +69,70 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
   [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
 
+  # UPM packages are IMMUTABLE: Unity refuses to import anything under
+  # Packages/<name>/ that has no .meta (see "has no meta file, but it's in an
+  # immutable folder" spam).  It will NOT generate them because it cannot write
+  # into the package cache.  So EVERY folder and file in build/ needs one.
+  #
+  # GUID must be DETERMINISTIC or Unity re-imports every sync and every
+  # reference to these scripts breaks.  Derive it from the package-relative
+  # path via md5 -> 32 hex chars, which is exactly Unity's GUID format.
+  # (Not Unity's own algorithm - doesn't need to be, they just need to be
+  # unique + stable.  Path-keyed means a rename gets a new GUID, a rebuild
+  # keeps the old one.)
+  $PY - "$VCS/build" <<'EOF'
+import hashlib, os, sys
+
+root = sys.argv[1].rstrip('/')
+FOLDER = ("fileFormatVersion: 2\n"
+          "guid: {g}\n"
+          "folderAsset: yes\n"
+          "DefaultImporter:\n"
+          "  externalObjects: {{}}\n"
+          "  userData: \n"
+          "  assetBundleName: \n"
+          "  assetBundleVariant: \n")
+SCRIPT = ("fileFormatVersion: 2\n"
+          "guid: {g}\n"
+          "MonoImporter:\n"
+          "  externalObjects: {{}}\n"
+          "  serializedVersion: 2\n"
+          "  defaultReferences: []\n"
+          "  executionOrder: 0\n"
+          "  icon: {{instanceID: 0}}\n"
+          "  userData: \n"
+          "  assetBundleName: \n"
+          "  assetBundleVariant: \n")
+
+def guid(rel):
+    # namespace prefix keeps these disjoint from any other hash scheme
+    return hashlib.md5(("nzk.toolkit/" + rel).encode()).hexdigest()
+
+made = 0
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames.sort(); filenames.sort()
+    rel = os.path.relpath(dirpath, root).replace(os.sep, '/')
+    if rel == '.':
+        continue
+    # folder meta (skip ones we already copied from the Unity source, which
+    # carry the REAL unity-minted guid for that folder)
+    mp = dirpath + '.meta'
+    if not os.path.exists(mp):
+        open(mp, 'w').write(FOLDER.format(g=guid(rel)))
+        made += 1
+    for fn in filenames:
+        if fn.endswith('.meta'):
+            continue
+        fp = os.path.join(dirpath, fn)
+        if os.path.exists(fp + '.meta'):
+            continue
+        is_cs = fn.endswith('.cs') or fn.endswith('.cs.nzk')
+        tpl = SCRIPT if is_cs else FOLDER.replace('folderAsset: yes\n', '')
+        open(fp + '.meta', 'w').write(tpl.format(g=guid(rel + '/' + fn)))
+        made += 1
+print("metas    -> %d written" % made)
+EOF
+
   # package.json: stamp a UPM version built from UTC wall-clock time.
   # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
   # ascending as time passes and stay inside the requested "0.1.x"-style
