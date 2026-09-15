@@ -291,7 +291,7 @@ fi
 
 # Keep the Nemesis project pointed at the same package repository.  Clone it
 # on first use; later runs only fast-forward it so local changes are preserved.
-NEMESIS=/nzk/unity/vrc/Nemesis Main/Assets/NZK toolkit v6
+NEMESIS='/nzk/unity/vrc/Nemesis Main/Assets/NZK toolkit v6'
 REPO_URL="https://github.com/NaruZkurai/vrcCS.git"
 if [ -d "$VCS/.git" ]; then
   REPO_URL=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
