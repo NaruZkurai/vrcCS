@@ -16,11 +16,17 @@ cd "$(dirname "$0")"
 PY=python3
 OUT=./NZK
 
-# NOTE: convert.py -d shutil.rmtree's ./NZK, so any .meta Unity wrote inside it
-# is destroyed on every run.  We deliberately do NOT try to preserve those:
-# Unity re-mints them on the next project import/refresh.  The .meta files that
-# matter for the package are the ones Unity writes in the NIGHTIVE tree, and the
-# rsyncs below carry them to the mirror verbatim.
+# NOTE: convert.py -d shutil.rmtree's ./NZK, then re-emits it fresh.  Unity
+# mints a .meta next to every folder and file it imports, and those GUIDs are
+# what every serialized reference points at - so we do NOT invent them, we wait
+# for Unity to write them and rsync them straight through.
+#
+# Unity only does that on a project refresh, which is ASYNC and out of our
+# control.  So after the convert passes we POLL until the metas show up (see
+# the gate below) instead of racing it and shipping a meta-less package.
+#
+# Do NOT hand-write .meta files / hash your own GUIDs here.  Unity's real ones
+# already exist on disk; the job is only to wait for and copy them.
 
 # 1) monolith: -d wipes ./NZK, emit fresh (Core/Core.cs)
 $PY convert.py -bc -d nzktoolkit_monolith_compilable.cs.nzk -o "$OUT" -ns NZK
@@ -38,6 +44,40 @@ $PY convert.py -bc -u Yaml.cs.nzk -o "$OUT" -ns NZK
 $PY convert.py -bc -u nan.cs.nzk -o "$OUT" -ns NZK
 
 echo "synced -> $(pwd)/${OUT}"
+
+# ===========================================================================
+# Wait for Unity to mint the .meta files.
+#
+# convert.py just wiped and re-emitted ./NZK, so the metas that WERE in there
+# are gone.  Unity writes them back only when it next refreshes the project,
+# which happens on its own schedule.  Racing that is what left build/NZK/ with
+# 222 .cs and 0 metas and made Unity spam "has no meta file, but it's in an
+# immutable folder" for every single file.
+#
+# So: poll until at least one .meta exists.  A meta appearing means Unity has
+# picked up the new tree and is writing siblings for it.
+#
+# Bounded on purpose.  An unbounded `while true` here would hang the script - /
+# and a CI job, and a git hook - forever if Unity is closed.  After the timeout
+# we warn and sync anyway: a package with stale/missing metas still beats a
+# wedged pipeline, and the next run (with Unity open) fixes it.
+# =========================================================================
+META_WAIT=${META_WAIT:-60}   # seconds; override via env when scripting
+waited=0
+while [ ! -e "$OUT/Core/Core.cs.meta" ]; do
+  if [ "$waited" -ge "$META_WAIT" ]; then
+    echo "metas    -> TIMEOUT after ${META_WAIT}s, no Unity .meta in $OUT" >&2
+    echo "metas    -> open Unity and let it refresh, then re-run ./sync.sh" >&2
+    break
+  fi
+  [ "$waited" -eq 0 ] && echo "metas    -> waiting up to ${META_WAIT}s for Unity to mint .meta..."
+  sleep 1
+  waited=$((waited + 1))
+done
+if [ -e "$OUT/Core/Core.cs.meta" ]; then
+  M=$(find "$OUT" -name '*.meta' | wc -l)
+  echo "metas    -> $M unity .meta present (waited ${waited}s)"
+fi
 
 # ===========================================================================
 # Mirror out to the vrcCS working tree.
