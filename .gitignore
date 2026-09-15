@@ -2,6 +2,3 @@
 *.dll
 *.pdb
 testig/*.runtimeconfig.json
-
-# Unity meta files — the mirror strips these, so never track them
-*.meta

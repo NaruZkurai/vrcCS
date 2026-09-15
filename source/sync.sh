@@ -43,7 +43,7 @@ echo "synced -> $(pwd)/${OUT}"
 # build/ (nzk.dll from the test harness, notes, etc.) is left alone.
 # ===========================================================================
 VCS=/nzk/git/vrcCS
-RSYNC=(rsync -a --delete --exclude='*.meta' --exclude='*.dll' --exclude='*.pdb')
+RSYNC=(rsync -a --delete --exclude='*.csproj' --exclude='*.dll' --exclude='*.pdb')
 if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   mkdir -p "$VCS/source" "$VCS/build"
 
