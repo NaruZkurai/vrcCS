@@ -106,28 +106,31 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
   [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
   if [ -d "$META_CACHE" ]; then
-    M=0
-    ( cd "$META_CACHE" && find . -name '*.meta' -print0 ) |
-      while IFS= read -r -d '' m; do
-        [ -e "$OUT/${m#./}" ] || continue
-        cp -f "$META_CACHE/${m#./}" "$OUT/${m#./}"
-      done
-    M=$(find "$OUT" -name '*.meta' | wc -l)
-    echo "metas    -> $M unity .meta restored into $OUT"
+    # restore into the regenerated tree.  Use a process-substitution loop, NOT
+    # `find | while`, so the counter survives (a piped while runs in a subshell
+    # and any variable set inside it is lost - that is why this used to report
+    # "0 restored" even when it had restored hundreds).
+    R=0
+    while IFS= read -r -d '' m; do
+      [ -e "$OUT/${m#./}" ] || continue
+      cp -f "$META_CACHE/${m#./}" "$OUT/${m#./}"
+      R=$((R + 1))
+    done < <(cd "$META_CACHE" && find . -name '*.meta' -print0)
+    echo "metas    -> $R unity .meta restored into $OUT"
+
+    # re-mirror ONLY the metas, now that they are back on disk.
+    # (the earlier rsyncs ran before the restore, so rsync -a --delete had
+    # already removed the target metas to match a then-meta-less ./NZK)
+    C=0
+    while IFS= read -r -d '' m; do
+      d="$VCS/build/NZK/$(dirname "${m#./}")"
+      mkdir -p "$d"
+      cp -f "$OUT/${m#./}" "$d/"
+      C=$((C + 1))
+    done < <(cd "$OUT" && find . -name '*.meta' -print0)
+    echo "metas    -> $C mirrored into build/NZK/"
   else
     echo "metas    -> none to restore; open Unity to mint them, then re-sync" >&2
-  fi
-
-  # re-mirror ONLY the metas, now that they are back on disk.
-  # (the earlier rsyncs ran before the restore; rsync -a would otherwise have
-  # deleted the target metas in build/ because ./NZK had none at that moment)
-  if [ -d "$META_CACHE" ]; then
-    ( cd "$OUT" && find . -name '*.meta' -print0 ) |
-      while IFS= read -r -d '' m; do
-        d="$VCS/build/NZK/$(dirname "${m#./}")"
-        mkdir -p "$d"
-        cp -f "$OUT/${m#./}" "$d/"
-      done
   fi
 
   # package.json: stamp a UPM version built from UTC wall-clock time.
