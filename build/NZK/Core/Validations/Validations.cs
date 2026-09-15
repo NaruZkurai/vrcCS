@@ -17,12 +17,18 @@ public static partial class Validations
   }
   public static bool ClipHasZeroScale(UnityEngine.AnimationClip clip)
   { if (clip == null) return false;
+    if (!HasValidClipFilePath(clip)) return false;
+    return NZK.Core.Nan.ClipHasZeroScale(
+      System.IO.File.ReadAllText(NZK.Core.Validated.FilePath));
+  }
+  public static bool HasValidClipFilePath(UnityEngine.AnimationClip clip)
+  { if (clip == null) return false;
     string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
     if (System.String.IsNullOrEmpty(assetPath)) return false;
-    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath,
+    NZK.Core.Validated.FilePath = NZK.E.PC(
+      NZK.Core.MenuItems.ApplicationDataPath,
       assetPath.Substring("Assets/".Length));
-    if (!System.IO.File.Exists(fullPath)) return false;
-    return NZK.Core.Nan.ClipHasZeroScale(System.IO.File.ReadAllText(fullPath));
+    return System.IO.File.Exists(NZK.Core.Validated.FilePath);
   }
 }
 }

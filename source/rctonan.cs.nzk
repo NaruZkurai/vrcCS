@@ -12,43 +12,20 @@ namespace NZK{public static partial class Core {public static partial class Menu
   public static void FixZeroScaleAnimations(UnityEngine.AnimationClip clip)
  {
     if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 23, 13, clip)) {return;}
-
-    string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-    if (NZK.E.D.NerrOK<System.String>(
-          System.String.IsNullOrEmpty(assetPath) ? null : assetPath,
-          31, 24, assetPath)) {return;}
-
-    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
-    if (NZK.E.D.NerrOK<System.String>(
-          System.IO.File.Exists(fullPath) ? fullPath : null,
-          24, 25, fullPath)) {return;}
-
-    string content = System.IO.File.ReadAllText(fullPath);
-    bool hasZero = content.Contains("value: {x: 0") ||
-                   content.Contains("value:\\s*\\{x:\\s*0") ||
-                   content.Contains(": 0, y: 0, z: 0");
-    if (!hasZero)
+      if (!NZK.Core.Validations.HasValidClipFilePath(clip)) {return;}
+      if (!NZK.Core.Validations.ClipHasZeroScale(clip))
     { NZK.E.D.OK(clip, 30, 29);
       return; }
 
-    if (FixAnimationClipScale(clip))
+      if (FixAnimationClipScale(clip, NZK.Core.Validated.FilePath))
     { NZK.AD.R();
       NZK.E.D.OK(clip, 29, 29); }
     else
     { NZK.E.D.OK(clip, 50, 47); }
   }
 
-  public static bool FixAnimationClipScale(UnityEngine.AnimationClip clip)
+  public static bool FixAnimationClipScale(UnityEngine.AnimationClip clip, string fullPath)
   {
-    if (clip == null) return false;
-    string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
-    if (!System.IO.File.Exists(fullPath))
-    {
-      UnityEngine.Debug.LogError("File not found: " + fullPath, clip);
-      return false;
-    }
-
     string content = System.IO.File.ReadAllText(fullPath);
     bool wasModified = false;
 
