@@ -9,6 +9,35 @@ namespace NZK{public static partial class Core {public static partial class Menu
   public static string yn = "y" + cnan;
   public static string zn = "z" + cnan;
 
+  public static void FixZeroScaleAnimations(UnityEngine.AnimationClip clip)
+ {
+    if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 23, 13, clip)) {return;}
+
+    string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
+    if (NZK.E.D.NerrOK<System.String>(
+          System.String.IsNullOrEmpty(assetPath) ? null : assetPath,
+          31, 24, assetPath)) {return;}
+
+    string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath, assetPath.Substring("Assets/".Length));
+    if (NZK.E.D.NerrOK<System.String>(
+          System.IO.File.Exists(fullPath) ? fullPath : null,
+          24, 25, fullPath)) {return;}
+
+    string content = System.IO.File.ReadAllText(fullPath);
+    bool hasZero = content.Contains("value: {x: 0") ||
+                   content.Contains("value:\\s*\\{x:\\s*0") ||
+                   content.Contains(": 0, y: 0, z: 0");
+    if (!hasZero)
+    { NZK.E.D.OK(clip, 30, 29);
+      return; }
+
+    if (FixAnimationClipScale(clip))
+    { NZK.AD.R();
+      NZK.E.D.OK(clip, 29, 29); }
+    else
+    { NZK.E.D.OK(clip, 50, 47); }
+  }
+
   public static bool FixAnimationClipScale(UnityEngine.AnimationClip clip)
   {
     if (clip == null) return false;
