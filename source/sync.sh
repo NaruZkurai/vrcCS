@@ -15,28 +15,12 @@ cd "$(dirname "$0")"
 
 PY=python3
 OUT=./NZK
-# Side cache for Unity-minted .meta files.  convert.py -d wipes ./NZK, which
-# would also delete the .meta Unity wrote next to each generated file, so we
-# stash them here first and put them back afterwards.  See the passthrough
-# block at the end of this script.
-META_CACHE=./.nzk-meta-cache
 
-# 0) snapshot Unity's .meta files out of ./NZK BEFORE the wipe.
-#    Unity mints these when it imports the project; they are the GUIDs every
-#    serialized reference points at, so they must survive the regen.
-#    Only .meta is captured - the .cs themselves are always regenerated.
-if [ -d "$OUT" ]; then
-  mkdir -p "$META_CACHE"
-  # iterate with `find .` from inside $OUT so paths are tree-relative
-  # (`./Core/X.cs.meta`); strip the leading `./` for the cache-relative copy.
-  while IFS= read -r -d '' m; do
-    rel="${m#./}"
-    mkdir -p "$META_CACHE/$(dirname "$rel")"
-    cp -f "$OUT/$rel" "$META_CACHE/$rel"
-  done < <(cd "$OUT" && find . -name '*.meta' -print0)
-  N=$(find "$META_CACHE" -name '*.meta' | wc -l)
-  [ "$N" -gt 0 ] && echo "metas    -> snapshotted $N unity .meta before wipe"
-fi
+# NOTE: convert.py -d shutil.rmtree's ./NZK, so any .meta Unity wrote inside it
+# is destroyed on every run.  We deliberately do NOT try to preserve those:
+# Unity re-mints them on the next project import/refresh.  The .meta files that
+# matter for the package are the ones Unity writes in the NIGHTIVE tree, and the
+# rsyncs below carry them to the mirror verbatim.
 
 # 1) monolith: -d wipes ./NZK, emit fresh (Core/Core.cs)
 $PY convert.py -bc -d nzktoolkit_monolith_compilable.cs.nzk -o "$OUT" -ns NZK
@@ -66,6 +50,10 @@ echo "synced -> $(pwd)/${OUT}"
 # ===========================================================================
 VCS=/nzk/git/vrcCS
 RSYNC=(rsync -a --delete --exclude='*.csproj' --exclude='*.dll' --exclude='*.pdb')
+# Same flags but WITHOUT --delete.  Unity writes .meta files into build/ when it
+# imports the package; a delete pass would wipe the GUIDs Unity just minted.
+# For build/ we only copy in, never delete out.
+RSYNC_KEEP=(rsync -a --exclude='*.csproj' --exclude='*.dll' --exclude='*.pdb')
 if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   mkdir -p "$VCS/source" "$VCS/build"
 
@@ -73,73 +61,26 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   # plus the pipeline itself (sync.sh is untracked in the Unity project).
   # Synced as a DIRECTORY (not a file list) so --delete can remove renaming
   # leftovers; the include globs whitelist exactly what belongs in source/.
-  "${RSYNC[@]}" --include='*.cs.nzk' --include='sync.sh' --include='convert.py' \
-                 --exclude='*' ./ "$VCS/source/"
+  # .meta is included so Unity's GUIDs travel with the sources too.
+  "${RSYNC[@]}" --include='*.cs.nzk' --include='*.meta' --include='sync.sh' \
+                 --include='convert.py' --exclude='*' ./ "$VCS/source/"
 
-  # build: the generated tree + the standalone menu-item source
-  "${RSYNC[@]}" "$OUT/" "$VCS/build/NZK/"
-  "${RSYNC[@]}" rctoan_menuItem.cs.nzk "$VCS/build/"
+  # build: the generated tree + the standalone menu-item source.
+  # NO --delete here: Unity writes .meta files in there after importing the
+  # package, and a delete pass would wipe GUIDs Unity just minted.  Copy in
+  # only, never delete out.
+  "${RSYNC_KEEP[@]}" "$OUT/" "$VCS/build/NZK/"
+  "${RSYNC_KEEP[@]}" rctoan_menuItem.cs.nzk "$VCS/build/"
 
   # shorthand is pre-leafed and NOT generated: mirror as-is (no changes).
-  # --delete here removes shorthand leaves that no longer exist at the source.
-  "${RSYNC[@]}" ./shorthand/ "$VCS/build/shorthand/"
+  # Carries its own .meta files (Unity minted them) - same no-delete rule.
+  "${RSYNC_KEEP[@]}" ./shorthand/ "$VCS/build/shorthand/"
 
-  # =========================================================================
-  # meta passthrough: build/ GETS THE REAL UNITY-MINTED .meta FILES.
-  #
-  # Unity is the only thing that mints GUIDs here.  When Unity imports
-  # `NZK-Toolkit/` it writes .meta next to every folder and file, and those
-  # GUIDs are what serialized references (scene components, prefabs, the .anim
-  # assets) point at.  So we COPY them, we never invent them.
-  #
-  # Folder metas (NZK.meta / shorthand.meta) come from the Unity source tree.
-  # Per-file metas come through the rsyncs, because shorthand/ and NZK/ are
-  # both mirrored whole.
-  #
-  # *** THE CATCH: convert.py -d shutil.rmtree's ./NZK on every run, taking
-  # Unity's freshly-written per-file .meta files with it.  That is why the
-  # source NZK tree sits at 0 metas / 222 .cs - they are deleted each sync.
-  # Step 0 at the top of this script snapshots them to $META_CACHE first; this
-  # step puts them back on top of the regenerated tree.
-  #
-  # Restore is path-keyed and only for paths that still exist after regen, so
-  # a deleted/renamed file drops its stale meta.  A rename gets a new GUID -
-  # correct, because to Unity a rename IS a new asset.
-  # =========================================================================
+  # Unity-minted folder metas: COPY the real ones, never invent a GUID.
+  # Everything inside NZK/ and shorthand/ gets its .meta via the rsyncs above;
+  # these two are the folder metas for the dirs themselves.
   [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
   [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
-  if [ -d "$META_CACHE" ]; then
-    # restore into the regenerated tree.  Use a process-substitution loop, NOT
-    # `find | while`, so the counter survives (a piped while runs in a subshell
-    # and any variable set inside it is lost - that is why this used to report
-    # "0 restored" even when it had restored hundreds).
-    # NOTE: iterate with `find .` from INSIDE the cache so every path is
-    # cache-relative (`./Core/X.cs.meta`); stripping the leading `./` then
-    # yields a tree-relative path that maps 1:1 onto $OUT.
-    R=0
-    while IFS= read -r -d '' m; do
-      rel="${m#./}"
-      [ -e "$OUT/$rel" ] || continue
-      cp -f "$META_CACHE/$rel" "$OUT/$rel"
-      R=$((R + 1))
-    done < <(cd "$META_CACHE" && find . -name '*.meta' -print0)
-    echo "metas    -> $R unity .meta restored into $OUT"
-
-    # re-mirror ONLY the metas, now that they are back on disk.
-    # (the earlier rsyncs ran before the restore, so rsync -a --delete had
-    # already removed the target metas to match a then-meta-less ./NZK)
-    C=0
-    while IFS= read -r -d '' m; do
-      rel="${m#./}"
-      d="$VCS/build/NZK/$(dirname "$rel")"
-      mkdir -p "$d"
-      cp -f "$OUT/$rel" "$d/"
-      C=$((C + 1))
-    done < <(cd "$OUT" && find . -name '*.meta' -print0)
-    echo "metas    -> $C mirrored into build/NZK/"
-  else
-    echo "metas    -> none to restore; open Unity to mint them, then re-sync" >&2
-  fi
 
   # package.json: stamp a UPM version built from UTC wall-clock time.
   # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
