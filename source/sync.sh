@@ -62,5 +62,70 @@ if [ -d "$VCS" ] && command -v rsync >/dev/null 2>&1; then
   # --delete here removes shorthand leaves that no longer exist at the source.
   "${RSYNC[@]}" ./shorthand/ "$VCS/build/shorthand/"
 
+  # Unity NEEDS the folder .meta files: without NZK.meta / shorthand.meta,
+  # Unity re-imports those folders with fresh GUIDs and every reference to
+  # them breaks.  The files INSIDE ./NZK are generated without .meta siblings,
+  # so only the two folder metas are copied (not a whole tree of metas).
+  [ -f ./NZK.meta ] && cp -f ./NZK.meta "$VCS/build/NZK.meta"
+  [ -f ./shorthand.meta ] && cp -f ./shorthand.meta "$VCS/build/shorthand.meta"
+
+  # package.json: stamp a UPM version built from UTC wall-clock time.
+  # 0.MMDDHHmm -> 0.<month><day><hour><min>, so versions sort strictly
+  # ascending as time passes and stay inside the requested "0.1.x"-style
+  # 0.x.y range ("0.1" prefix kept literal, time fills the rest).
+  [ -f ./package.json ] && cp -f ./package.json "$VCS/build/package.json"
+  VER=""
+  if [ -f "$VCS/build/package.json" ]; then
+    STAMP=$(date -u +%m%d%H%M)
+    $PY - "$VCS/build/package.json" "$STAMP" <<'EOF'
+import json, sys
+p, stamp = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d['version'] = '0.1.%s' % stamp.lstrip('0')
+json.dump(d, open(p, 'w'), indent=2)
+open(p, 'a').write('\n')
+EOF
+    # read the version BACK from the json so the commit message can never
+    # disagree with what actually got written (single source of truth).
+    VER=$($PY -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" \
+                "$VCS/build/package.json")
+    echo "versioned -> $VER"
+  fi
+
   echo "mirrored -> $VCS/{source,build}"
+
+  # =========================================================================
+  # Commit + push the mirror.  Only runs when the tree actually changed, so a
+  # no-op sync doesn't spam empty commits.  Message carries the version that
+  # was just stamped into build/package.json.
+  # GIT_* unset: this may be invoked from inside a git hook / Unity, where an
+  # inherited GIT_DIR or GIT_INDEX_FILE would silently target the WRONG repo.
+  # =========================================================================
+  if command -v git >/dev/null 2>&1 &&
+     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+         git -C "$VCS" rev-parse --git-dir >/dev/null 2>&1; then
+    if [ -n "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+                 git -C "$VCS" status --porcelain)" ]; then
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+          git -C "$VCS" add -A
+      MSG="sync from testing version ${VER:-unknown}"
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+          git -C "$VCS" commit -q -m "$MSG"
+      # push only if a remote is configured; tolerate offline (non-fatal so a
+      # failed push never aborts a sync that otherwise succeeded).
+      if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+             git -C "$VCS" remote | grep -q .; then
+        if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+               git -C "$VCS" push -q; then
+          echo "pushed   -> $MSG"
+        else
+          echo "commit ok, push FAILED (offline or auth?) -> $MSG" >&2
+        fi
+      else
+        echo "committed -> $MSG (no remote, skipped push)"
+      fi
+    else
+      echo "no changes to commit"
+    fi
+  fi
 fi
