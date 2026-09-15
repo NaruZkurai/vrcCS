@@ -25,12 +25,8 @@ public static class Fix
     return true; }
   public static System.String ReplaceVectorScaleValue(System.String input)
   { if (System.String.IsNullOrEmpty(input)) return input;
-    var regex = new System.Text.RegularExpressions.Regex("value:\\s*\\{x:\\s*([^,}]+),\\s*y:\\s*([^,}]+),\\s*z:\\s*([^,}]+)\\}",System.Text.RegularExpressions.RegexOptions.Multiline);
-    return regex.Replace(input, m =>
-      NZK.Core.Yaml.IsZero(m.Groups[1].Value) &&
-      NZK.Core.Yaml.IsZero(m.Groups[2].Value) &&
-      NZK.Core.Yaml.IsZero(m.Groups[3].Value)
-        ? "value: {x: NaN, y: NaN, z: NaN}" : m.Value); }
+    var regex = new System.Text.RegularExpressions.Regex("value:\\s*\\{x:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*y:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*z:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*\\}",System.Text.RegularExpressions.RegexOptions.Multiline);
+    return regex.Replace(input, m => "value: {x: NaN, y: NaN, z: NaN}"); }
   public static System.String FixEditorCurveScale(System.String content)
   { if (System.String.IsNullOrEmpty(content)) return content;
     int e0 = content.IndexOf("  m_EditorCurves:",System.StringComparison.Ordinal);

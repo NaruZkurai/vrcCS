@@ -113,8 +113,9 @@ public static partial class Core {
       return;
     }
     string content = System.IO.File.ReadAllText(fullPath);
-    bool hasZero = !string.Equals(ReplaceVectorScaleValue(content), content) ||
-             !string.Equals(FixEditorCurveScale(content), content);
+    bool hasZero = content.Contains("value: {x: 0") ||
+                   content.Contains("value:\\s*\\{x:\\s*0") ||
+                   content.Contains(": 0, y: 0, z: 0");
     string message = hasZero ? "Found zero scale curves in this animation." : "No zero scale curves found.";
     NZK.E.Dd("Zero Scale Animation Check", message, "OK");
   }
@@ -122,13 +123,9 @@ public static partial class Core {
   {
     if (string.IsNullOrEmpty(input)) return input;
     var regex = new System.Text.RegularExpressions.Regex(
-      "value:\\s*\\{x:\\s*([^,}]+),\\s*y:\\s*([^,}]+),\\s*z:\\s*([^,}]+)\\}",
+      "value:\\s*\\{x:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*y:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*,\\s*z:\\s*[-0-9.eE]*0(?:\\.0+)?[^,}]*\\}",
       System.Text.RegularExpressions.RegexOptions.Multiline);
-    return regex.Replace(input, m =>
-      Yaml.IsZero(m.Groups[1].Value) &&
-      Yaml.IsZero(m.Groups[2].Value) &&
-      Yaml.IsZero(m.Groups[3].Value)
-        ? "value: {x: NaN, y: NaN, z: NaN}" : m.Value);
+    return regex.Replace(input, m => "value: {x: NaN, y: NaN, z: NaN}");
   }
   // m_EditorCurves rows are per-axis (attribute: m_LocalScale.x/.y/.z), one curve
   // per block but consecutive x/y/z of the SAME path sit adjacent. A scale is
