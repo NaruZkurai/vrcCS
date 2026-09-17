@@ -4,3 +4,9 @@
 testig/*.runtimeconfig.json
 # Pre-conversion originals, kept for reference only
 _bak_v6_originals/
+
+# Consolidation backup (Core duplicate removed)
+_bak_nzk_consolidate/
+
+# Consolidation backup (Core duplicate removed)
+_bak_nzk_consolidate/
