@@ -20,7 +20,7 @@ namespace NZK{  public static partial class B{
    *
    * NULL-TESTS: the counted-null helper was here as B.llNll. A null test asks
    * what each input IS, not how many booleans were combined, so it belongs
-   * with B.NllE. See B.Nll.cs.
+   * with B.N.ll.e. See B.N.cs.
    */
   public static bool Oll2(bool a,bool b)
   { return a || b; }
