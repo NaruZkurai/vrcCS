@@ -96,13 +96,30 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
 
 | file | member | purpose |
 |---|---|---|
-| `P.La.cs` | `P.La(folder,name,i)` | one frozen-mesh leaf path: `Combine(folder, Sanitize(name)+"_"+i+".asset")` |
+| `P.La.cs` | `P.La(folder,sanitizedName,i)` | one frozen-mesh leaf path: `Combine(folder, sanitizedName+"_"+i+".asset")` |
 | `M.By.cs` | `M.Vb(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
 | `M.By.cs` | `M.By(bytes)` | human-readable size, one decimal on KB/MB |
 | `M.By.cs` | `M.Mb(mesh)` | `M.By(M.Vb(mesh))` |
 
 `M.BytesPerVertex48` is the shared per-vertex budget, so the generator and the
 freezer cannot drift on what "48 bytes per vertex" means.
+
+### Shorthand must not reference `NZK.<SubNamespace>`
+
+Shorthand files declare `namespace NZK{ ... }`. Inside that namespace the
+identifier `NZK` first resolves to the **current** namespace, so a reference to
+`NZK.NaNimate.NZKNaNimateMeshFolder` is read as `NZK.NZK.NaNimate...` and the
+project build fails with:
+
+```
+P.La.cs(10,28): error CS0234: The type or namespace name 'NaNimate'
+does not exist in the namespace 'NZK'
+```
+
+Shorthand is the lowest layer — it must not depend on the v6 types at all.
+Push the coupling to the **caller**: `P.La` takes an already-sanitized name, and
+`LeafAssetPath` — which lives in `NZK.NaNimate` and can see `Sanitize` —
+does the sanitizing.
 
 ### Verified
 
