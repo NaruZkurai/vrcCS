@@ -36,7 +36,7 @@ public static partial class Validations
   { if (clip == null) return false;
     string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
     if (System.String.IsNullOrEmpty(assetPath)) return false;
-    NZK.Core.Validated.FilePath = NZK.S.P.C(
+    NZK.Core.Validated.FilePath = NZK.E.PC(
       NZK.Core.MenuItems.ApplicationDataPath,
       assetPath.Substring("Assets/".Length));
     return System.IO.File.Exists(NZK.Core.Validated.FilePath);

@@ -10,7 +10,7 @@ namespace NZK
 { public static partial class E
 
  {
-    public static partial class D
+    public static class D
     { public static void OK(string a, string b){ NZK.E.Dd(a ,b, "ok");}
       /* numeric code pair: resolves via BarCodeKiller, same as NerrOK.
          The object u supplies the value interpolated into rrNN<T>(T u) codes. */

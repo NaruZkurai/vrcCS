@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 namespace NZK { public static partial class Core { public static partial class MenuItems
 {
 
@@ -62,3 +63,4 @@ namespace NZK { public static partial class Core { public static partial class M
   }
 }
 }}
+#endif

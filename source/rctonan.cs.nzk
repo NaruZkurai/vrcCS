@@ -214,7 +214,7 @@ namespace NZK{public static partial class Core {public static partial class Menu
       if (clip == null) continue;
 
       string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-      string fullPath = NZK.S.P.C(NZK.Core.MenuItems.ApplicationDataPath,
+      string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath,
                      assetPath.Substring("Assets/".Length));
       if (!System.IO.File.Exists(fullPath)) continue;
 
