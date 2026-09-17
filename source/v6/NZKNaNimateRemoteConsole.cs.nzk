@@ -48,7 +48,6 @@ public static class NZKNaNimateRemoteConsole{
             UnityEditor.EditorApplication.update+=OnUpdate;
             UnityEngine.Debug.Log(NZK.S.NZKNaNimatePrefix("Remote console listening: "+CmdFile));
         }
-        }
 
         static void OnUpdate(){
             /* Poll at ~2 Hz. Cheap: one file read, and only re-parses on change. */
@@ -175,5 +174,6 @@ public static class NZKNaNimateRemoteConsole{
             UnityEngine.Debug.LogWarning(NZK.S.NZKNaNimatePrefix("Remote console: unknown command '"+cmd+"'"));
         }
     }
+}
 }
 #endif
