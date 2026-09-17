@@ -94,7 +94,7 @@ namespace NZK.NaNimate
                 return;
             }
 
-            string avatarName = NZK.S.P.Leaf(modelPath);
+            string avatarName = NZK.S.P.Next(modelPath);
 
             /* Deliberately NO forced reimport here.
              *
@@ -752,7 +752,7 @@ namespace NZK.NaNimate
 
         void FreezeMeshes()
         {
-            string avatarName = NZK.S.P.Leaf(_modelAssetPath);
+            string avatarName = NZK.S.P.Next(_modelAssetPath);
 
             bool proceed = UnityEditor.EditorUtility.DisplayDialog(
                 Title,

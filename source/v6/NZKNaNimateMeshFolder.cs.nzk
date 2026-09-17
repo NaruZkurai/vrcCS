@@ -29,7 +29,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public const string PrefabsFolderName="Prefabs";
 
     /* Bare file name of an asset path, without its extension. */
-    static string LeafNameOf(string path){return NZK.S.P.Leaf(path);}
+    static string LeafNameOf(string path){return NZK.S.P.Next(path);}
 
     /* Generated avatar root for an already-sanitized avatar name. */
     static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+NZK.SS.An(avatarName);}

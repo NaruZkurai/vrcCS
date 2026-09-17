@@ -130,7 +130,7 @@ public static class NZKNaNimateMeshGenerator{
         var result=new Result();
 
         if(NZK.B.NoE(avatarName))
-            avatarName=NZK.S.P.Leaf(modelAssetPath);
+            avatarName=NZK.S.P.Next(modelAssetPath);
 
         UnityEngine.GameObject source=
             UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(modelAssetPath);
@@ -550,7 +550,7 @@ public static class NZKNaNimateMeshGenerator{
         if(NZK.B.NoE(message))
             return false;
 
-        return NZK.B.ll5(
+        return NZK.B.Oll5(
             NZK.S.HasOIC(message,"restricted during asset importing"),
             NZK.S.HasOIC(message,"cannot write Mesh assets during import"),
             NZK.S.HasOIC(message,"not a valid Unity folder"),

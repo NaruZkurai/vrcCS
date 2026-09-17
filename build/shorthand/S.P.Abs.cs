@@ -15,7 +15,7 @@ namespace NZK{  public static partial class S{
    *     .Abs     = what you GET BACK: an absolute path.
    *
    *   So S.P.Abs reads out as "String, Path, Absolute" - return type, kind,
-   *   result. S.P.Leaf is the same shape: a string, a path, the leaf name.
+   *   result. S.P.Next is the same shape: a string, a path, the NEXT segment.
    *
    * This is why the nesting exists rather than a flat S.Abs: at the call site
    * S.P.Abs announces both the type and the subject, so a reader never has to

@@ -102,7 +102,7 @@ namespace NZK.NaNimate
                 return absoluteModel;
 
             /* Sibling .blend sharing the model's base name (fbx -> blend). */
-            string baseName = NZK.S.P.Leaf(absoluteModel);
+            string baseName = NZK.S.P.Next(absoluteModel);
             string directory = System.IO.Path.GetDirectoryName(absoluteModel);
             if (!NZK.B.NoE(directory) && System.IO.Directory.Exists(directory))
             {

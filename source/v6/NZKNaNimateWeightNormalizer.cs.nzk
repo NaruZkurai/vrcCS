@@ -91,7 +91,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
         public float worstDeviation;
         public long approxBytesBefore;
         public long approxBytesAfter;
-        public bool HasWarning=>NZK.B.ll4(verticesNaNimateOnly>0,outOfRangeBoneRefs>0,nonFiniteScales>0,worstDeviation>1e-3f);
+        public bool HasWarning=>NZK.B.Oll4(verticesNaNimateOnly>0,outOfRangeBoneRefs>0,nonFiniteScales>0,worstDeviation>1e-3f);
     }
 
     /* ---- entry points ---------------------------------------------------- */
@@ -114,7 +114,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
         if(renderers.Length==0){result.error="No UnityEngine.SkinnedMeshRenderer found in "+modelAssetPath;return result;}
 
         if(NZK.B.NoE(outputFolder)){
-            string avatar=NZK.S.P.Leaf(modelAssetPath);
+            string avatar=NZK.S.P.Next(modelAssetPath);
             outputFolder=NZKNaNimateMeshFolder.FolderFor(modelAssetPath,avatar);
         }
 
@@ -387,7 +387,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
                 float assigned=pinnedTotal;
 
                 for(int s=0;s<4;s++){
-                    if(NZK.B.ll3(isNaNimate[s],s==lastOrdinary,w[s]<=0f)) continue;
+                    if(NZK.B.Oll3(isNaNimate[s],s==lastOrdinary,w[s]<=0f)) continue;
 
                     w[s]*=scale;
 

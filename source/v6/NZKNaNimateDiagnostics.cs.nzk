@@ -35,7 +35,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateDiagnostics{
 
             /* A model selected instead: derive the generated prefab for it. */
             if(NZK.S.EndsAnyOIC(path,".blend",".fbx")){
-                string avatar=NZK.S.P.Leaf(path);
+                string avatar=NZK.S.P.Next(path);
                 string folder=NZKNaNimateMeshFolder.PrefabFolderFor(path,avatar);
                 return folder+"/"+avatar+".prefab";
             }
