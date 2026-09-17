@@ -60,7 +60,7 @@ namespace NZK{  public static partial class E{
        The object u supplies the value interpolated into rrNN<T>(T u) codes. */
     public static void OK<T>(T u, System.Int64 a, System.Int64 b)
     { string title; string message;
-      NZK.E.BarCodeKiller(a, b, u, out title, out message);
+      NZK.E.BarCodeKiller<T>(a, b, u, out title, out message);
       Show(title, message, "ok"); }
 
     /* Guard: dialogue ONLY when c is null, and returns whether it fired.
@@ -78,7 +78,7 @@ namespace NZK{  public static partial class E{
        show.  Showing is this file's job, which is why the check and the modal
        are one call apart rather than in one helper. */
     public static bool NerrOK<T>(T c, int a, int b, T u) where T : class
-    { if (!NZK.E.BarCodePair(c == null, a, b, u)) return false;
+    { if (!NZK.E.BarCodePair<T>(c == null, a, b, u)) return false;
       OK(u, a, b);
       return true; }
   }

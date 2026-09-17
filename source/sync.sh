@@ -47,6 +47,8 @@ done
 PY=python3
 [ -d "$SRC" ] || { echo "sync.sh: no source tree at $SRC" >&2; exit 2; }
 
+command -v rsync >/dev/null 2>&1 || { echo "sync.sh: rsync not found" >&2; exit 2; }
+
 SCRATCH=$(mktemp -d)
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -71,7 +73,26 @@ for f in "${sources[@]}"; do
 done
 echo "generated -> $BUILD/NZK"
 
-command -v rsync >/dev/null 2>&1 || { echo "sync.sh: rsync not found" >&2; exit 2; }
+# Hand-written shorthand leaves.  The .cs.nzk conversion above only ever writes
+# $BUILD/NZK; the leaves under source/shorthand/ are authored by hand and were
+# never copied into build/shorthand/, so an edit to one of them silently never
+# reached a single consumer.  Symptom: fixing E.D.cs in source/ and re-running
+# sync.sh left build/shorthand/editor/E.D.cs byte-identical to the broken
+# version, and the project kept raising the error that was just fixed.
+#
+# --delete is deliberate for the same reason as the project rsync below: a leaf
+# renamed or deleted at the source must disappear from build/, or Unity keeps
+# compiling a class that no longer exists upstream.  *.meta is excluded from
+# deletion because Unity mints those and their GUIDs must survive.
+#
+# source/shorthand/ editor|runtime split is preserved by rsync -a.
+if [ -d "$SRC/shorthand" ]; then
+  count=$(find "$SRC/shorthand" -name '*.cs' | wc -l)
+  rsync -a --delete --exclude='*.meta' --exclude='*.csproj' \
+        --exclude='*.dll' --exclude='*.pdb' \
+        "$SRC/shorthand/" "$BUILD/shorthand/"
+  echo "shorthand -> $BUILD/shorthand ($count leaf/leaves)"
+fi
 
 RSYNC_BUILD=(rsync -a --delete --exclude='*.meta' --exclude='*.csproj' \
                   --exclude='*.dll' --exclude='*.pdb')
