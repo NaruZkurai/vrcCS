@@ -43,6 +43,61 @@ cd "/nzk/unity/blank project/Assets/NZK-Toolkit"
 generated. It is mirrored as-is (`S.pc.cs` -> `NZK.E.PC`, `E.D.cs` -> nested
 `NZK.E.D`, `AD.R.cs` -> `NZK.AD.R`, `ToINT.cs` -> `NZK.I.To`).
 
+## v6 — NaNimate generator
+
+The `source/v6/` set is the NaNimate mesh pipeline, converted from the live
+project's `Assets/NZK toolkit v6/Editor/*.cs`. Ten sources:
+
+`NZKNaNimateMeshGenerator`, `NZKNaNimateMeshFolder`, `NZKNaNimateWeightImporter`,
+`NZKNaNimateWeightNormalizer`, `NZKNaNimateDiagnostics`, `NZKNaNimateRemoteConsole`,
+`NZKNaNimateGroupManifest`, `NZKNaNimateGroupScanner`, `NZKNaNimateGroupWindow`,
+`NZKNaNimateMeshFreezer`.
+
+### Split and deploy
+
+```bash
+cd /nzk/git/GP_CS_SPLITTER
+cp /nzk/git/vrcCS/source/v6/*.cs.nzk .
+cp /nzk/git/vrcCS/source/shorthand/*.cs .
+# -bc = one file per type, -d first pass wipes dest, -u appends later passes
+for f in NZKNaNimate*.cs.nzk; do
+  convert.py "$f" -bc -d -o /tmp/nzkv6   # (first pass only)
+done
+```
+
+Output path derives from the **top-level type**, never the filename. Then
+deploy into the project:
+
+| what | from | to |
+|---|---|---|
+| split leaves (19) | `/tmp/nzkv6/**/*.cs` | `Assets/NZK toolkit v6/Editor/**` |
+| shorthand (23) | `source/shorthand/*.cs` | `Assets/NZK toolkit v6/vrcCS/build/shorthand/` |
+
+Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
+
+### Dialect rules
+
+- Shape: `namespace NZK{  public static partial class X{...}}` — two spaces
+  after `namespace NZK{`, no newline before the class.
+- No `using` directives. Everything fully qualified.
+- Rationale/XML kept **verbatim** in meaning, but as `/* */` blocks only.
+  A literal `*/` must never appear inside a comment body.
+- Trivial bodies reuse shorthand; prefer a shorthand helper over a buried local.
+- `ll<N>` is the counted-or family (`B.ll2`…`B.ll5`, `B.llAny`, `B.llNll`).
+
+### Verified
+
+- Deployed tree: 19 split leaves + `delete.NzkJacketWeights.cs` = 20 `.cs`.
+- All repeated outer types (`NZKNaNimateMeshGenerator`, `…GroupScanner`,
+  `…WeightNormalizer`, `…RemoteConsole`, `…MeshFreezer`) are `partial` and merge.
+- `unity-cli console --type error` → **0** `CS####` errors.
+
+The 11 `CreateFolder is not supported while importing out-of-process` lines and
+the `GodRevenger` / `ShroomPet2` prefab-variant errors in the console are
+**stale/pre-existing** — the former was fixed by moving `EnsureFolder` to
+`System.IO.Directory.CreateDirectory` + `.meta` sidecars (`AssetDatabase.CreateFolder`
+is main-thread-only, and `Refresh` is a no-op during import).
+
 ## Split of duties
 
 - **`Yaml.cs.nzk`** — how a Unity YAML document is *built*: markers, block
