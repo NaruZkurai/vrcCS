@@ -787,7 +787,7 @@ namespace NZK.NaNimate
 
             UnityEngine.Debug.Log(NZK.S.NZKNaNimatePrefix("Froze " + freeze.rendererCount + " renderer(s) / " +
                       freeze.meshCount + " mesh(es), ~" +
-                      NZKNaNimateMeshFreezer.FormatBytes(freeze.approxBytes) +
+                      NZK.U.B2.PFX(freeze.approxBytes) +
                       " → " + freeze.prefabPath));
 
             if (freeze.HasWarning)

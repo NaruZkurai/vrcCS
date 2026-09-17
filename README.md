@@ -88,7 +88,7 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
   line. Multi-step bodies (loops, several statements) stay expanded, but each
   step should itself be a single line.
 - If a 1-liner would repeat an expression used elsewhere, it becomes a new
-  shorthand file instead — see `NZK.SS.An` and `M.By`, extracted exactly because
+  shorthand file instead — see `NZK.SS.An` and `U.Bfll2`, extracted exactly because
   two files needed the same logic.
 - `ll<N>` is the counted-or family (`B.ll2`…`B.ll5`, `B.llAny`, `B.llNll`).
 
@@ -100,11 +100,11 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
 | `S.P.Leaf.cs` | `S.P.Leaf(path)` | last path segment, extension stripped |
 | `SS.An.cs` | `NZK.SS.An(name)` | asset-name safety: allowlist + injective `$hex` escape |
 | `SS.An.cs` | `SS.AssetPath(folder,name,i)` | one generated asset leaf: `Combine(folder, name+"_"+i+".asset")` |
-| `M.By.cs` | `M.Vb(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
-| `M.By.cs` | `M.By(bytes)` | human-readable size, one decimal on KB/MB |
-| `M.By.cs` | `M.Mb(mesh)` | `M.By(M.Vb(mesh))` |
+| `U.Bfll2.cs` | `U.Bfll2.VC(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
+| `U.Bfll2.cs` | `U.B2.PFX(bytes)` | human-readable size, one decimal on KB/MB |
+| `U.Bfll2.cs` | `U.B2.Mb(mesh)` | `U.B2.PFX(U.Bfll2.VC(mesh))` |
 
-`M.BytesPerVertex48` is the shared per-vertex budget, so the generator and the
+`U.BytesPerVertex48` is the shared per-vertex budget, so the generator and the
 freezer cannot drift on what "48 bytes per vertex" means.
 
 The sanitizer used to exist twice — as `San.Sanitize` in shorthand and as a
@@ -135,9 +135,9 @@ result. The same reading gives `SS.An` — **S**tring + **S**anitize, then the
 | `S.P.Leaf` | returns a **String**, the subject is a **P**ath, you get back the **Leaf** segment |
 | `SS.An` | returns a **S**tring, the subject is **S**anitizing, you get back the **An**onymized name |
 | `SS.AssetPath` | same group — returns a **String**, a safe asset **Path** |
-| `M.Vb` | **M**isc · **V**ertex **B**ytes |
-| `M.By` | **M**isc · **B**ytes (formatted) |
-| `M.Mb` | **M**isc · **M**esh **B**ytes (formatted) |
+| `U.Bfll2.VC` | **U**tility · **B**ytes **f**rom, `ll2` = the two inputs multiplied · **V**ertex **C**ount |
+| `U.B2.PFX` | **U**tility · **B**ytes group 2 · the unit **P**re**F**i**X** (`"1.2 MB"`) |
+| `U.B2.Mb` | **U**tility · **B**ytes group 2 · **M**esh **B**ytes (formatted) |
 | `T.Tp` / `T.Tpr` | **T**ransform · **T**ransform **P**ath, root-exclusive / **R**oot-inclusive |
 | `B.ll<N>` | **B**ool · `ll<N>` = a counted `\|\|` |
 

@@ -139,14 +139,14 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
 
                 if(written.TryGetValue(sourceMesh,out UnityEngine.Mesh already)){renderer.sharedMesh=already;continue;}
 
-                result.approxBytesBefore+=EstimateBytes(sourceMesh);
+                result.approxBytesBefore+=NZK.U.Bfll2.VC(sourceMesh);
 
                 string[] boneNames=BoneNamesOf(renderer);
                 UnityEngine.Mesh normalized=Normalize(sourceMesh,boneNames,result);
                 if(normalized==null) continue;
 
                 result.meshesProcessed++;
-                result.approxBytesAfter+=EstimateBytes(normalized);
+                result.approxBytesAfter+=NZK.U.Bfll2.VC(normalized);
 
                 string leafPath=UniqueLeafPath(outputFolder,sourceMesh.name,usedNames);
 
@@ -481,9 +481,5 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
 
         return folder+"/"+name+".asset";
     }
-
-    static long EstimateBytes(UnityEngine.Mesh mesh){return NZK.M.Vb(mesh);}
-
-    public static string FormatBytes(long bytes){return NZK.M.By(bytes);}
   }
 }

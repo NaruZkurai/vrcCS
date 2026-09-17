@@ -137,7 +137,7 @@ public static class NZKNaNimateMeshFreezer{
 
                     frozenBySource[sourceMesh]=frozen;
                     result.meshCount++;
-                    result.approxBytes+=EstimateBytes(sourceMesh);
+                    result.approxBytes+=NZK.U.Bfll2.VC(sourceMesh);
                 }
 
                 cloneRenderer.sharedMesh=frozen;
@@ -281,13 +281,5 @@ public static class NZKNaNimateMeshFreezer{
         copy.indexFormat=sourceMesh.indexFormat;
         return copy;
     }
-
-    /*
-     * Rough size of a mesh's serialized data, for reporting only.
-     * Vertex count times a conservative per-vertex stride.
-     */
-    static long EstimateBytes(UnityEngine.Mesh mesh){return NZK.M.Vb(mesh);}
-
-    public static string FormatBytes(long bytes){return NZK.M.By(bytes);}
   }
 }
