@@ -34,7 +34,7 @@ namespace NZK{  public static partial class B{
        * as one element is true.
        */
       public static bool t(params bool[] a)
-      { if (NZK.L.IsEmpty(a)) return false;
+      { if (NZK.B.mpty.t(a)) return false;
         for (int i=0;i<a.Length;i++) if (a[i]) return true;
         return false; }
 
@@ -50,7 +50,7 @@ namespace NZK{  public static partial class B{
        * all-true case is what matters.
        */
       public static bool nt(params bool[] a)
-      { if (NZK.L.IsEmpty(a)) return false;
+      { if (NZK.B.mpty.t(a)) return false;
         for (int i=0;i<a.Length;i++) if (!a[i]) return true;
         return false; }
     }

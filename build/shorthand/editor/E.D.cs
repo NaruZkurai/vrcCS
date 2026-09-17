@@ -23,15 +23,22 @@ namespace NZK{  public static partial class E{
    * is defined once and both the dialog and the console paths print the same
    * text.
    *
-   * D IS PARTIAL, and that is load-bearing.  It used to be declared here as
-   * `public static class D` while another leaf declared
-   * `public static partial class D`, which C# rejects:
+   * D IS A NESTED CLASS, and it mirrors E.C on purpose.  E.C is the console
+   * family (d/w/e) and E.D is the dialogue family (Show/OK/NerrOK): the letter
+   * names the OUTPUT, and the members are read INSIDE that family.  A flat
+   * E.DOK / E.DShow spelling was tried and reverted - it read as if "DOK" were
+   * one word, and it broke the parallel with E.C.d, so the two output families
+   * no longer looked like the same idea.
+   *
+   * The modifier MUST stay `partial`.  It was once declared `public static
+   * class D` while another leaf declared `public static partial class D`, which
+   * C# rejects:
    *
    *   error CS0260: Missing partial modifier on declaration of type 'D';
    *   another partial declaration of this type exists
    *
    * Merging the old E.Dd leaf in below is what makes this the single
-   * declaration, so the modifier must stay.
+   * declaration, so the modifier is load-bearing.
    */
   public static partial class D
   {
@@ -41,7 +48,7 @@ namespace NZK{  public static partial class E{
      * Carried over from the standalone E.Dd leaf.  Was NZK.E.Dd(title, message,
      * ok); kept as a separate member rather than inlined because older callers
      * reach it by that shape, and it reads as the primitive the rest build on.
-     * Callers that want the pairwise API should use OK/NerrOK above.
+     * Callers that want the pairwise API should use OK/NerrOK below.
      */
     public static void Show(string title, string message, string ok)
     { UnityEditor.EditorUtility.DisplayDialog(title, message, ok); }
@@ -59,12 +66,20 @@ namespace NZK{  public static partial class E{
     /* Guard: dialogue ONLY when c is null, and returns whether it fired.
        Reads as `if (NZK.E.D.NerrOK(x, 45, 10, x)) return;`
 
-       Delegates to BarCodePair rather than resolving the codes here.  That
-       helper ALSO validates that both codes exist and returns false without
-       showing anything when they do not - a local re-implementation silently
-       dropped that check, which would have shown a dialog titled
-       "unknown:45" instead of staying quiet. */
+       Asks BarCodePair whether the condition holds AND both codes exist, then
+       shows the dialogue itself.  The resolution is delegated but the DISPLAY
+       is not, because BarCodePair compiles into the RUNTIME assembly and
+       cannot reach the modal:
+
+         error CS0117: 'E' does not contain a definition for 'DOK'
+
+       BarCodePair staying silent is also the behaviour an editor-less caller
+       wants: it can validate a code pair without a dialogue it has no way to
+       show.  Showing is this file's job, which is why the check and the modal
+       are one call apart rather than in one helper. */
     public static bool NerrOK<T>(T c, int a, int b, T u) where T : class
-    { return NZK.E.BarCodePair(c == null, a, b, u); }
+    { if (!NZK.E.BarCodePair(c == null, a, b, u)) return false;
+      OK(u, a, b);
+      return true; }
   }
 }}

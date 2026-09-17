@@ -54,7 +54,7 @@ namespace NZK{  public static partial class B{
      * also get a distinct name rather than a count.
      */
     public static bool ny<T>(params T[] a)
-    { if (NZK.L.IsEmpty(a)) return false;
+    { if (NZK.B.mpty.t(a)) return false;
       for (int i=0;i<a.Length;i++) if (a[i] == null) return true;
       return false; }
 

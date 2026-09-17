@@ -33,7 +33,18 @@ public static void BarCodeKiller<T>(System.Int64 value, System.Int64 value2, T u
 }
 
  /* compound boolean: true when the pair resolves to a real condition.
-    value2 < 0 means the condition is described by a single code. */
+    value2 < 0 means the condition is described by a single code.
+
+    RUNTIME-SAFE: resolves and validates codes only.  It does NOT show a
+    dialogue - this file compiles into the RUNTIME assembly, and the modal
+    lives in E.D.cs which compiles into the EDITOR assembly, so reaching for
+    E.D.OK here is a compile error, not a style choice:
+
+      error CS0117: 'E' does not contain a definition for 'DOK'
+
+    Run out of this file, that call resolved E.D.OK from the runtime side where
+    no such member exists.  Callers that want the modal use E.D.NerrOK, which
+    lives beside the dialogue and asks this helper whether to fire. */
 public static bool BarCodePair<T>(bool condition, System.Int64 value, System.Int64 value2, T u)
 {
  if (!condition) {return false;}
@@ -44,9 +55,5 @@ public static bool BarCodePair<T>(bool condition, System.Int64 value, System.Int
  bool hasB = value2 < 0 ? true :
              typeof(NZK.E).GetField("rr" + value2, flags) != null ||
              typeof(NZK.E).GetMethod("rr" + value2, flags) != null;
- if (!hasA || !hasB) {return false;}
- string title; string message;
- BarCodeKiller(value, value2, u, out title, out message);
- NZK.E.D.OK(title, message);
- return true;
+ return hasA && hasB;
 }}}
