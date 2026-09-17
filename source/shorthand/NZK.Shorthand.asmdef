@@ -1,5 +1,5 @@
 {
-    "name": "NZK.Shorthand.Runtime",
+    "name": "NZK.Shorthand",
     "rootNamespace": "NZK",
     "references": [],
     "includePlatforms": [],

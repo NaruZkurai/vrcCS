@@ -10,6 +10,21 @@ public static partial class MenuItems {
   public static string xn = "x" + cnan;
   public static string yn = "y" + cnan;
   public static string zn = "z" + cnan;
+  /*
+   * EDITOR-ONLY: guarded because it reports through E.D, whose members are
+   * themselves #if UNITY_EDITOR.  Without the guard a player build loses E.D
+   * and this caller fails:
+   *
+   *   error CS0117: 'E.D' does not contain a definition for 'NerrOK'
+   *   error CS0117: 'E.D' does not contain a definition for 'OK'
+   *
+   * It also reaches NZK.Core.Validations (editor-only) and NZK.AD.R, so every
+   * dependency here is editor-side.  The scale maths it calls -
+   * FixAnimationClipScale and friends - stay unguarded: they are pure string
+   * and curve handling with no UnityEditor dependency, and runtime code uses
+   * them.
+   */
+#if UNITY_EDITOR
   public static void FixZeroScaleAnimations(UnityEngine.AnimationClip clip)
  {
     if (NZK.E.D.NerrOK<UnityEngine.Object>(clip, 23, 13, clip)) {return;}
@@ -23,6 +38,7 @@ public static partial class MenuItems {
     else
     { NZK.E.D.OK(clip, 50, 47); }
   }
+#endif
   public static bool FixAnimationClipScale(UnityEngine.AnimationClip clip, string fullPath)
   {
     string content = System.IO.File.ReadAllText(fullPath);
@@ -173,6 +189,28 @@ public static partial class MenuItems {
     return new FileContents(System.IO.File.ReadAllText(path));
   }
   
+  /*
+   * EDITOR-ONLY: needs #if UNITY_EDITOR.
+   *
+   * This method is [UnityEditor.MenuItem].  In a player build UnityEditor does
+   * not exist, so an unguarded copy fails the VRC avatar upload with:
+   *
+   *   error CS0234: The type or namespace name 'MenuItemAttribute' does not
+   *   exist in the namespace 'UnityEditor' (are you missing an assembly
+   *   reference?)
+   *   Error building Player because scripts had compiler errors
+   *   AssetBundle was not built
+   *
+   * The -p1 output segment is a SEPARATE FILE from MenuItems.cs, so the guard
+   * that wraps the first segment does not cover this one - each file needs its
+   * own #if.  This method was the one MenuItem in the tree that never got one.
+   *
+   * Also note this duplicates rctoan_menuItem.cs.nzk's
+   * "Assets/NZK Toolkit/Check Zero Scale Animations" entry; that file's copy is
+   * the live one.  Kept here because callers reach it by name, but the pair
+   * must not drift.
+   */
+#if UNITY_EDITOR
   [UnityEditor.MenuItem("Assets/NZK Toolkit/Check Zero Scale Animations", false, 31)]
   public static void CheckZeroScaleAnimationsAsset()
   {
@@ -204,6 +242,7 @@ public static partial class MenuItems {
     NZK.E.D.Show("Zero Scale Animation Check",
         "Found zero scale curves in:\n" + message, "OK");
   }
+#endif
 }
 }
 }

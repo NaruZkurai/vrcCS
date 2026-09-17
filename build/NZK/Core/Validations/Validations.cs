@@ -3,6 +3,23 @@ namespace NZK
 public static partial class Core {
 public static partial class Validations
 {
+/*
+ * EDITOR-ONLY: every member here reads UnityEditor.Selection or
+ * UnityEditor.AssetDatabase, which do not exist in a player build.  The whole
+ * body is guarded rather than chosen per member, because there is no runtime
+ * use for "what is currently selected" in a shipped avatar.
+ *
+ * Unguarded, this is what the VRC avatar upload reported:
+ *
+ *   error CS0234: The type or namespace name 'Selection' does not exist in the
+ *   namespace 'UnityEditor' (are you missing an assembly reference?)
+ *   Error building Player because scripts had compiler errors
+ *   AssetBundle was not built
+ *
+ * Validated (below) stays OUTSIDE the guard: it is a plain string holder that
+ * runtime code reads, so the type must exist in both builds.
+ */
+#if UNITY_EDITOR
   public static bool HasSelectedAnimations()
   { string[] guids = UnityEditor.Selection.assetGUIDs;
     if (guids == null || guids.Length == 0) return false;
@@ -41,6 +58,7 @@ public static partial class Validations
       assetPath.Substring("Assets/".Length));
     return System.IO.File.Exists(NZK.Core.Validated.FilePath);
   }
+#endif
 }
 }
 }

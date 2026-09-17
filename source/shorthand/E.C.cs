@@ -1,9 +1,8 @@
 namespace NZK{  public static partial class E{
   /*
    * CONSOLE output.  RUNTIME-SAFE: uses UnityEngine.Debug only, so it compiles
-   * in a player build.  Anything that reaches for UnityEditor hangs the BUILD
-   * ("error CS0234: MenuItemAttribute does not exist in UnityEditor" on the VRC
-   * upload path), so editor-only output lives in E.D instead, in editor/.
+   * in a player build unchanged - no guard needed, nothing here reaches for
+   * UnityEditor.
    *
    *   E.C.d   Debug.Log        - information
    *   E.C.w   Debug.LogWarning - something looks wrong but is survivable
