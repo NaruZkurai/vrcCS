@@ -470,7 +470,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
     /* ---- path helpers ---------------------------------------------------- */
 
     static string UniqueLeafPath(string folder,string meshName,System.Collections.Generic.HashSet<string> used){
-        string baseName=NZK.S.S.An(meshName);
+        string baseName=NZK.SS.An(meshName);
         string name=baseName;
         int suffix=1;
 

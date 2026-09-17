@@ -125,7 +125,7 @@ public static class NZKNaNimateMeshFreezer{
 
                 if(!frozenBySource.TryGetValue(sourceMesh,out UnityEngine.Mesh frozen)){
                     string leafName=NZK.L.Unique(
-                        NZK.S.S.An(sourceRenderer.name),
+                        NZK.SS.An(sourceRenderer.name),
                         usedNames);
 
                     frozen=FreezeMesh(sourceMesh,leafName);

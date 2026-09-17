@@ -32,7 +32,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     static string LeafNameOf(string path){return NZK.S.P.Leaf(path);}
 
     /* Generated avatar root for an already-sanitized avatar name. */
-    static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+NZK.S.S.An(avatarName);}
+    static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+NZK.SS.An(avatarName);}
 
     /* Project-relative folder for a model's frozen meshes. */
     public static string FolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+MeshesFolderName;}
@@ -44,10 +44,10 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public static string PrefabFolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+PrefabsFolderName;}
 
     /* Project-relative path for one frozen mesh leaf. */
-    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.S.S.AssetPath(folder,NZK.S.S.An(rendererName),subMeshIndex);}
+    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.SS.AssetPath(folder,NZK.SS.An(rendererName),subMeshIndex);}
 
     /* Project-relative path for the frozen prefab. */
-    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,NZK.S.S.An(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
+    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,NZK.SS.An(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
 
     /*
      * Ensure a project-relative folder exists.
@@ -129,11 +129,11 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     /*
      * Make a name safe to use as a Unity asset FILE name.
      *
-     * Delegates to NZK.S.S.An. The allowlist rule and the injective '$hex'
+     * Delegates to NZK.SS.An. The allowlist rule and the injective '$hex'
      * encoding used to be implemented here; it now lives in exactly one place
      * so the two copies cannot drift. See S.S.cs for why '_' substitution is
      * LOSSY and why '$' is reserved as the escape marker.
      */
-    public static string Sanitize(string name){return NZK.S.S.An(name);}
+    public static string Sanitize(string name){return NZK.SS.An(name);}
   }
 }

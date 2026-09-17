@@ -1,21 +1,29 @@
-namespace NZK{  public static partial class S{
+namespace NZK{  public static partial class SS{
   /*
    * Sanitizing helpers that RETURN A STRING.
    *
    * NAMING:
-   *     S       = the return type: this returns a System.String.
-   *     .S      = the CONCEPT: Sanitize. A safe asset name.
-   *     .An     = what you get back: an ANonymized/sanitized name.
+   *     SS      = the concept plus the return type: String, Sanitize.
+   *     .An     = what you get back: an ANonymized / sanitized name.
    *
-   *   So S.S.An reads as "String, Sanitized, name" - 4 + 4 characters at the
+   *   SS.An reads as "String, Sanitized, name" - 4 + 2 + 2 characters at the
    *   call site, against the 7 of the San.Sanitize it replaces. The old form
    *   was also self-contradicting: a class named San whose member repeated
    *   "Sanitize" spent seven characters saying one thing twice.
    *
-   * The 'S' concept segment also carries the two sibling members below
-   * (AssetPath), so everything about safe names is found under one prefix.
+   * WHY NOT S.S.An:
+   *   It was written that way first and does not compile. C# will not let a
+   *   class contain a nested type of the same name, so "class S{ class S{} }"
+   *   is rejected and every call site fails with:
+   *
+   *     error CS0117: 'S' does not contain a definition for 'S'
+   *
+   *   Flattening the pair to the single top-level class SS keeps the reading
+   *   and the brevity without fighting the language.
+   *
+   * The group also carries AssetPath below, so everything about safe names is
+   * found under one prefix.
    */
-  public static partial class SS{
     /*
      * Make a name safe to use as a Unity asset FILE name.
      *
@@ -121,6 +129,5 @@ namespace NZK{  public static partial class S{
     public static string AssetPath(string folder,string sanitizedName,int subMeshIndex){
       return System.IO.Path.Combine(folder,sanitizedName+"_"+subMeshIndex+".asset");
     }
-  }
   }
 }

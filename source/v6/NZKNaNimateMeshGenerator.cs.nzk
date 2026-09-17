@@ -203,7 +203,7 @@ public static class NZKNaNimateMeshGenerator{
             }
 
             payload.leaf=NZK.L.Unique(
-                NZK.S.S.An(renderers[i].name),usedNames);
+                NZK.SS.An(renderers[i].name),usedNames);
             payload.rendererName=renderers[i].name;
             payload.rendererPath=NZK.T.Tp(renderers[i].transform);
             payload.sourceRenderer=renderers[i];
