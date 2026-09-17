@@ -2,7 +2,7 @@
     "name": "NZK.Shorthand.Editor",
     "rootNamespace": "NZK",
     "references": [
-        "NZK.Shorthand.Runtime"
+        "Assembly-CSharp"
     ],
     "includePlatforms": [
         "Editor"
