@@ -47,7 +47,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.SS.AssetPath(folder,NZK.SS.An(rendererName),subMeshIndex);}
 
     /* Project-relative path for the frozen prefab. */
-    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,NZK.SS.An(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
+    public static string PrefabPath(string folder,string avatarName){return NZK.S.P.C(folder,NZK.SS.An(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
 
     /*
      * Ensure a project-relative folder exists.

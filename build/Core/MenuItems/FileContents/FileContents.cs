@@ -1,0 +1,12 @@
+namespace NZK
+{
+public static partial class Core {
+public static partial class MenuItems {
+public class FileContents
+  {
+    public string Contents { get; }
+    public FileContents(string contents) { Contents = contents; }
+  }
+}
+}
+}

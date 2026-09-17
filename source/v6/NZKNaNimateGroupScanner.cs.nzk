@@ -106,7 +106,7 @@ namespace NZK.NaNimate
             string directory = System.IO.Path.GetDirectoryName(absoluteModel);
             if (!NZK.B.NoE(directory) && System.IO.Directory.Exists(directory))
             {
-                string sibling = NZK.E.PC(directory, baseName + ".blend");
+                string sibling = NZK.S.P.C(directory, baseName + ".blend");
                 if (System.IO.File.Exists(sibling))
                     return sibling;
 
