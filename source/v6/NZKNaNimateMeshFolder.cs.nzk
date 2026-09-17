@@ -88,7 +88,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     }
 
     /* Absolute filesystem path for a project-relative asset path. */
-    public static string AbsoluteFromProject(string projectRelative){return NZK.S.P.Abs(projectRelative);}
+    public static string AbsoluteFromProject(string projectRelative){return NZK.S.P.r2a(projectRelative);}
 
     /*
      * Write a folder's .meta when it is absent.

@@ -40,7 +40,7 @@ cd "/nzk/unity/blank project/Assets/NZK-Toolkit"
 | 5 | `nan.cs.nzk` | `NZK/Core/Core_p4.cs` |
 
 `shorthand/` is **pre-leafed** — hand-written, one member per file, never
-generated. It is mirrored as-is (`S.pc.cs` -> `NZK.E.PC`, `E.D.cs` -> nested
+generated. It is mirrored as-is (`S.P.cs` -> `NZK.S.P.*`, `E.D.cs` -> nested
 `NZK.E.D`, `AD.R.cs` -> `NZK.AD.R`, `ToINT.cs` -> `NZK.I.To`).
 
 ## v6 — NaNimate generator
@@ -90,14 +90,19 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
 - If a 1-liner would repeat an expression used elsewhere, it becomes a new
   shorthand file instead — see `NZK.SS.An` and `U.Bfll2`, extracted exactly because
   two files needed the same logic.
-- `ll<N>` is the counted-or family (`B.ll2`…`B.ll5`, `B.llAny`, `B.llNll`).
+- `Oll<N>` is the counted-or family (`B.Oll2`…`B.Oll5`). The arity-agnostic
+  collection forms are `B.I.A.t` / `B.I.A.nt` (**B**ool · **I**f · **A**ny ·
+  true / NOT true), and the null family is `B.NllE` / `B.NllAny`.
 
 ### Shorthand added during v6
 
 | file | member | purpose |
 |---|---|---|
-| `S.P.Abs.cs` | `S.P.Abs(path)` | project-relative → absolute path on disk |
-| `S.P.Leaf.cs` | `S.P.Leaf(path)` | last path segment, extension stripped |
+| `S.P.cs` | `S.P.r2a(path)` | relative → absolute path on disk |
+| `S.P.cs` | `S.P.Next(path)` | terminal path segment, extension stripped |
+| `S.P.cs` | `S.P.C(a,b)` | `Path.Combine` |
+| `B.I.A.cs` | `B.I.A.t(bools)` | true if ANY supplied value is true |
+| `B.I.A.cs` | `B.I.A.nt(bools)` | true if ANY supplied value is not true |
 | `SS.An.cs` | `NZK.SS.An(name)` | asset-name safety: allowlist + injective `$hex` escape |
 | `SS.An.cs` | `SS.AssetPath(folder,name,i)` | one generated asset leaf: `Combine(folder, name+"_"+i+".asset")` |
 | `U.Bfll2.cs` | `U.Bfll2.VC(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
@@ -122,24 +127,28 @@ concept, useful in any Unity project. Never a noun naming the thing.**
 **2. `S` means "returns a `System.String`".** Everything after it describes
 *what that string is*.
 
-So `S.P.Abs` is **S**tring · **P**ath · **A**bsolute: return type, subject,
-result. The same reading gives `SS.An` — **S**tring + **S**anitize, then the
-**An**onymized name — and `SS.AssetPath` in the same group.
+So `S.P.r2a` is **S**tring · **P**ath · **r**elative **2** **a**bsolute:
+return type, subject, conversion. The same reading gives `SS.An` —
+**S**tring + **S**anitize, then the **An**onymized name — and `SS.AssetPath`
+in the same group.
 
 `SS` is a two-letter *group* rather than a nested `S.S`, because C# rejects
 `class S{ class S{} }`; see the rejected-names table below.
 
 | name | reads as |
 |---|---|
-| `S.P.Abs` | returns a **String**, the subject is a **P**ath, you get back an **Abs**olute path |
-| `S.P.Leaf` | returns a **String**, the subject is a **P**ath, you get back the **Leaf** segment |
+| `S.P.r2a` | returns a **S**tring, the subject is a **P**ath, converted **r**elative **2** **a**bsolute |
+| `S.P.Next` | returns a **S**tring, the subject is a **P**ath, you get its **Next** segment |
+| `S.P.C` | same group — returns a **S**tring, `Path.**C**ombine` |
+| `B.I.A.t` | **B**ool · **I**f · **A**ny · is **t**rue |
+| `B.I.A.nt` | **B**ool · **I**f · **A**ny · is **n**o**t** true |
 | `SS.An` | returns a **S**tring, the subject is **S**anitizing, you get back the **An**onymized name |
-| `SS.AssetPath` | same group — returns a **String**, a safe asset **Path** |
+| `SS.AssetPath` | same group — returns a **S**tring, a safe asset **Path** |
 | `U.Bfll2.VC` | **U**tility · **B**ytes **f**rom, `ll2` = the two inputs multiplied · **V**ertex **C**ount |
 | `U.B2.PFX` | **U**tility · **B**ytes group 2 · the unit **P**re**F**i**X** (`"1.2 MB"`) |
 | `U.B2.Mb` | **U**tility · **B**ytes group 2 · **M**esh **B**ytes (formatted) |
 | `T.Tp` / `T.Tpr` | **T**ransform · **T**ransform **P**ath, root-exclusive / **R**oot-inclusive |
-| `B.ll<N>` | **B**ool · `ll<N>` = a counted `\|\|` |
+| `B.Oll<N>` | **B**ool · **O**r, with **ll** as the name for `\|\|`, counted by arity |
 
 Predicates read as sentences and stay spelled out in full (`S.Has`,
 `S.Head`, `L.IsEmpty`, `B.NoE`): a clipped form there costs readability and
@@ -157,6 +166,12 @@ saves almost nothing.
 | `San.Sanitize` | 4 + 7 chars saying one thing twice — a class named `San` with a member called `Sanitize` |
 | `S.San.AssetPath` | 4 + 4 + 9; folded into the `SS.` group as `SS.AssetPath` |
 | `S.S.An` | does not compile — C# rejects `class S{ class S{} }`, so every call site fails with `error CS0117: 'S' does not contain a definition for 'S'`. Flattened to the top-level class `SS`. |
+| `B.ll<N>` | `ll` was a name for `\|\|`, so `ll3` read as "two vertical lines, three times" and said nothing about the operation. Became `B.Oll<N>`. |
+| `B.llNll` | a NULL test filed under an OR name, while `B.NllE` sat with no family around it. Moved to the null group as `B.NllAny`. |
+| `B.OllAny` | a `params` body contradicts the one thing the or group is about — the count being fixed and visible in the name. Moved to `B.I.A.t` / `B.I.A.nt`. |
+| `S.P.Abs` | `Abs` named the RESULT but not the direction, so a reader still had to check the parameter to learn which way the conversion went. Became `S.P.r2a`. |
+| `S.P.Leaf` | a path is read left to right; the terminal segment is what you reach NEXT. Also the path may point at a folder, so "leaf" was doing double duty with the generated leaf assets. Became `S.P.Next`. |
+| `P.Abs` (the file) | one member per file meant the file name repeated the member and the group read as unrelated files. The three `S.P` members now share `S.P.cs`. |
 
 ### Shorthand must not depend on the feature layer
 
@@ -315,9 +330,9 @@ Prefer a named local/helper over duplicating an expression.
     NZK.S.EndsAnyOIC(string,params string[])  any-of suffixes             (NEW)
     NZK.S.NZKNaNimatePrefix(string)    "[NZK NaNimate] " + message
     NZK.S.Head(string,char) / S.Tail(string,char)                        (NEW)
-    NZK.E.PC(string,string)            Path.Combine
-    NZK.S.P.Abs(string)                absolute from project-relative
-    NZK.S.P.Leaf(string)               leaf name without extension
+    NZK.S.P.C(string,string)           Path.Combine
+    NZK.S.P.r2a(string)                absolute from project-relative
+    NZK.S.P.Next(string)               leaf name without extension
     NZK.SS.An(string)                  asset-name safety (allowlist + $hex)
     NZK.SS.AssetPath(string,string,int)  sanitized asset-leaf path
     NZK.T.Tp(Transform)/Tpr(Transform) transform path root-exclusive/inclusive

@@ -98,7 +98,7 @@ public static class NZKNaNimateMeshGenerator{
 
     /* Throw unless the project-relative folder exists on disk. */
     static void ThrowIfFolderMissing(string projectRelativeFolder){
-        string absolute=NZK.S.P.Abs(projectRelativeFolder);
+        string absolute=NZK.S.P.r2a(projectRelativeFolder);
 
         if(!System.IO.Directory.Exists(absolute))
             throw new System.Exception("folder was not created: "+projectRelativeFolder+
@@ -107,7 +107,7 @@ public static class NZKNaNimateMeshGenerator{
 
     /* Throw unless the project-relative asset file exists on disk. */
     static void ThrowIfFileMissing(string projectRelativeFile){
-        string absolute=NZK.S.P.Abs(projectRelativeFile);
+        string absolute=NZK.S.P.r2a(projectRelativeFile);
 
         if(!System.IO.File.Exists(absolute))
             throw new System.Exception("asset was not written: "+projectRelativeFile+
@@ -530,7 +530,7 @@ public static class NZKNaNimateMeshGenerator{
      * existing .meta rather than orphaning references.
      */
     static bool ReplaceAsset(string leafPath,UnityEngine.Mesh mesh){
-        if(System.IO.File.Exists(NZK.S.P.Abs(leafPath))){
+        if(System.IO.File.Exists(NZK.S.P.r2a(leafPath))){
             /*
              * DeleteAsset removes the file but leaves the .meta, so the GUID
              * survives and every existing reference still resolves.

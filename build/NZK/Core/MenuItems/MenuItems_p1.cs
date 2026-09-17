@@ -191,7 +191,7 @@ public static partial class MenuItems {
         UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.AnimationClip>(path);
       if (clip == null) continue;
       string assetPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
-      string fullPath = NZK.E.PC(NZK.Core.MenuItems.ApplicationDataPath,
+      string fullPath = NZK.S.P.C(NZK.Core.MenuItems.ApplicationDataPath,
                      assetPath.Substring("Assets/".Length));
       if (!System.IO.File.Exists(fullPath)) continue;
       string content = System.IO.File.ReadAllText(fullPath);

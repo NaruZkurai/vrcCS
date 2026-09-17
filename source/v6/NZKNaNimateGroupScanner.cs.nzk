@@ -95,7 +95,7 @@ namespace NZK.NaNimate
             if (NZK.B.NoE(modelAssetPath))
                 return null;
 
-            string absoluteModel = NZK.S.P.Abs(modelAssetPath);
+            string absoluteModel = NZK.S.P.r2a(modelAssetPath);
 
             /* Already a .blend - use it directly. */
             if (NZK.S.EndsWithOIC(absoluteModel, ".blend") && System.IO.File.Exists(absoluteModel))
