@@ -29,10 +29,10 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public const string PrefabsFolderName="Prefabs";
 
     /* Bare file name of an asset path, without its extension. */
-    static string LeafNameOf(string path){return NZK.P.Sn(path);}
+    static string LeafNameOf(string path){return NZK.S.P.Leaf(path);}
 
     /* Generated avatar root for an already-sanitized avatar name. */
-    static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+Sanitize(avatarName);}
+    static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+NZK.S.S.An(avatarName);}
 
     /* Project-relative folder for a model's frozen meshes. */
     public static string FolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+MeshesFolderName;}
@@ -44,10 +44,10 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public static string PrefabFolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+PrefabsFolderName;}
 
     /* Project-relative path for one frozen mesh leaf. */
-    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.P.La(folder,Sanitize(rendererName),subMeshIndex);}
+    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.S.S.AssetPath(folder,NZK.S.S.An(rendererName),subMeshIndex);}
 
     /* Project-relative path for the frozen prefab. */
-    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,Sanitize(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
+    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,NZK.S.S.An(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
 
     /*
      * Ensure a project-relative folder exists.
@@ -88,7 +88,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     }
 
     /* Absolute filesystem path for a project-relative asset path. */
-    public static string AbsoluteFromProject(string projectRelative){return NZK.P.Pa(projectRelative);}
+    public static string AbsoluteFromProject(string projectRelative){return NZK.S.P.Abs(projectRelative);}
 
     /*
      * Write a folder's .meta when it is absent.
@@ -129,81 +129,11 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     /*
      * Make a name safe to use as a Unity asset FILE name.
      *
-     * Uses an ALLOWLIST, not System.IO.Path.GetInvalidFileNameChars.
-     * That API is platform-dependent and, on Linux, returns only NUL and '/',
-     * so characters Unity itself refuses - notably '|' - passed straight
-     * through and every write failed with:
-     *
-     * "'...|------------RealPP------------|.asset' is not a valid asset file name."
-     *
-     * Unity's asset-name validation is stricter than the host filesystem's,
-     * and it must hold on every platform, so the rule is defined here instead
-     * of being inherited from the OS.
-     *
-     * Kept: letters, digits, space, dot, dash, underscore, parentheses.
-     * Everything else - including '|', ':', '*', '?', '"', '<', '>', '/',
-     * '\\', control characters and non-ASCII - becomes '_'.
-     *
-     *
-     * Encode a name so it is safe as a Unity asset file name AND so distinct
-     * inputs can never alias to the same output.
-     *
-     * A plain '_' substitution is LOSSY: "Pads_K+E" and "Pads_K_E" are two
-     * different source objects, but both sanitize to "Pads_K_E". That is not
-     * merely cosmetic - it made the generated leaf names order-dependent and
-     * produced a corrupt mesh (RootBoneNameHash: 0) for one of the pair,
-     * because the wrong source was matched back to the written asset.
-     *
-     * So an unsafe character is ENCODED, not replaced (see
-     * EncodeUnsafeChar), keeping the mapping injective:
-     * different input names always yield different output names.
-     *
-     * Safe characters are kept VERBATIM, including dots, so names such as
-     * "B Body.001" stay readable and keep their identity.
+     * Delegates to NZK.S.S.An. The allowlist rule and the injective '$hex'
+     * encoding used to be implemented here; it now lives in exactly one place
+     * so the two copies cannot drift. See S.S.cs for why '_' substitution is
+     * LOSSY and why '$' is reserved as the escape marker.
      */
-    public static string Sanitize(string name){
-        if(NZK.B.NoE(name)) return "unnamed";
-
-        var sb=new System.Text.StringBuilder(name.Length+8);
-
-        for(int i=0;i<name.Length;i++){
-            char c=name[i];
-
-            if(IsSafeAssetNameChar(c)){sb.Append(c);continue;}
-
-            EncodeUnsafeChar(sb,c);
-        }
-
-        /*
-         * Trailing dots and spaces are legal on Linux but are stripped or
-         * rejected by other platforms, so remove them for a portable name.
-         */
-        string result=sb.ToString().Trim().TrimEnd('.',' ').Trim();
-
-        return result.Length==0?"unnamed":result;
-    }
-
-    /*
-     * Append the encoding of one unsafe character.
-     *
-     * Unicode code units above 0x7F and any reserved/illegal ASCII become
-     * '$' followed by the value in hex. '$' is itself unsafe, so it also
-     * encodes to '$24' - which is what makes the mapping unambiguous and
-     * reversible: a literal '$' in the source can never be confused with an
-     * escape sequence.
-     */
-    static void EncodeUnsafeChar(System.Text.StringBuilder sb,char c){sb.Append('$');sb.Append(((int)c).ToString("x2"));}
-
-    /*
-     * True for characters permitted in a Unity asset file name.
-     *
-     * Deliberately conservative: an unnecessary escape is a cosmetic
-     * difference, whereas one rejected character fails the entire write.
-     * '$' is NOT safe - it is reserved as the escape marker.
-     */
-    static bool IsSafeAssetNameChar(char c){
-        if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')) return true;
-        return c==' '||c=='.'||c=='-'||c=='_'||c=='('||c==')'||c=='['||c==']';
-    }
+    public static string Sanitize(string name){return NZK.S.S.An(name);}
   }
 }

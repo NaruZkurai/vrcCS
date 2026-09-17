@@ -88,7 +88,7 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
   line. Multi-step bodies (loops, several statements) stay expanded, but each
   step should itself be a single line.
 - If a 1-liner would repeat an expression used elsewhere, it becomes a new
-  shorthand file instead — see `P.La` and `M.By`, extracted exactly because
+  shorthand file instead — see `S.S.An` and `M.By`, extracted exactly because
   two files needed the same logic.
 - `ll<N>` is the counted-or family (`B.ll2`…`B.ll5`, `B.llAny`, `B.llNll`).
 
@@ -96,13 +96,79 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
 
 | file | member | purpose |
 |---|---|---|
-| `P.La.cs` | `P.La(folder,sanitizedName,i)` | one frozen-mesh leaf path: `Combine(folder, sanitizedName+"_"+i+".asset")` |
+| `S.P.Abs.cs` | `S.P.Abs(path)` | project-relative → absolute path on disk |
+| `S.P.Leaf.cs` | `S.P.Leaf(path)` | last path segment, extension stripped |
+| `S.S.cs` | `S.S.An(name)` | asset-name safety: allowlist + injective `$hex` escape |
+| `S.S.cs` | `S.S.AssetPath(folder,name,i)` | one generated asset leaf: `Combine(folder, name+"_"+i+".asset")` |
 | `M.By.cs` | `M.Vb(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
 | `M.By.cs` | `M.By(bytes)` | human-readable size, one decimal on KB/MB |
 | `M.By.cs` | `M.Mb(mesh)` | `M.By(M.Vb(mesh))` |
 
 `M.BytesPerVertex48` is the shared per-vertex budget, so the generator and the
 freezer cannot drift on what "48 bytes per vertex" means.
+
+The sanitizer used to exist twice — as `San.Sanitize` in shorthand and as a
+private `Sanitize` inside `NZKNaNimateMeshFolder`. It now lives only in
+`S.S.An`; `NZKNaNimateMeshFolder.Sanitize` delegates to it, so the two copies
+cannot diverge.
+
+### Naming scheme
+
+Two rules, applied in order:
+
+**1. The first letter is the RETURN TYPE or the broad CONCEPT — a programming
+concept, useful in any Unity project. Never a noun naming the thing.**
+
+**2. `S` means "returns a `System.String`".** Everything after it describes
+*what that string is*.
+
+`S.P.Abs` reads out as **S**tring · **P**ath · **A**bsolute — return type,
+subject, result. The same shape one level down: `S.S.An` is **S**tring ·
+**S**anitized · name, and `S.S.AssetPath` is the same group's path builder.
+
+| name | reads as |
+|---|---|
+| `S.P.Abs` | returns a **String**, the subject is a **P**ath, you get back an **Abs**olute path |
+| `S.P.Leaf` | returns a **String**, the subject is a **P**ath, you get back the **Leaf** segment |
+| `S.S.An` | returns a **String**, the subject is **S**anitizing, you get back the **An**onymized name |
+| `S.S.AssetPath` | same group — returns a **String**, a safe asset **Path** |
+| `M.Vb` | **M**isc · **V**ertex **B**ytes |
+| `M.By` | **M**isc · **B**ytes (formatted) |
+| `M.Mb` | **M**isc · **M**esh **B**ytes (formatted) |
+| `T.Tp` / `T.Tpr` | **T**ransform · **T**ransform **P**ath, root-exclusive / **R**oot-inclusive |
+| `B.ll<N>` | **B**ool · `ll<N>` = a counted `\|\|` |
+
+Predicates read as sentences and stay spelled out in full (`S.Has`,
+`S.Head`, `L.IsEmpty`, `B.NoE`): a clipped form there costs readability and
+saves almost nothing.
+
+#### Names rejected, and why (each was tried and changed)
+
+| rejected | reason |
+|---|---|
+| `P.La` | "La" decoded to nothing |
+| `P.Sn` | "**S**hort **N**ame" describes *length*, not *identity* — a short name of what? |
+| `P.Pa` | `P` = "Project", but **every** path here is project-relative, so the letter excluded nothing and explained nothing |
+| `IO.Abs` | `IO` is a **noun**, not a programming concept, and a path is not an object |
+| `P.Abs` | a path here **is** a `string`; a top-level `P` class implied a type that does not exist |
+| `San.Sanitize` | 4 + 7 chars saying one thing twice — a class named `San` with a member called `Sanitize` |
+| `S.San.AssetPath` | 4 + 4 + 9; folded into the `S.S.` group as `S.S.AssetPath` |
+
+### Shorthand must not depend on the feature layer
+
+**Shorthand is the foundation layer; it must never reference `NZK.NaNimate`.**
+Inside `namespace NZK`, the reference `NZK.NaNimate.X` resolves *relative to the
+enclosing* `NZK` and is read as `NZK.NZK.NaNimate.X`:
+
+```
+error CS0234: The type or namespace name 'NaNimate' does not exist in the
+namespace 'NZK'
+```
+
+This is why `S.S.AssetPath` takes an **already-sanitized** name and does not
+call `S.S.An` itself — doing so would require reaching up into
+`NZK.NaNimate.NZKNaNimateMeshFolder`, invert the dependency, and force every
+consumer to inherit the coupling. Sanitizing stays at the call site.
 
 ### Shorthand must not reference `NZK.<SubNamespace>`
 
@@ -112,14 +178,14 @@ identifier `NZK` first resolves to the **current** namespace, so a reference to
 project build fails with:
 
 ```
-P.La.cs(10,28): error CS0234: The type or namespace name 'NaNimate'
+S.S.cs(10,28): error CS0234: The type or namespace name 'NaNimate'
 does not exist in the namespace 'NZK'
 ```
 
 Shorthand is the lowest layer — it must not depend on the v6 types at all.
-Push the coupling to the **caller**: `P.La` takes an already-sanitized name, and
-`LeafAssetPath` — which lives in `NZK.NaNimate` and can see `Sanitize` —
-does the sanitizing.
+Push the coupling to the **caller**: `S.S.AssetPath` takes an already-sanitized
+name, and `LeafAssetPath` — which lives in `NZK.NaNimate` and can see
+`S.S.An` — does the sanitizing.
 
 ### Verified
 
@@ -246,9 +312,10 @@ Prefer a named local/helper over duplicating an expression.
     NZK.S.NZKNaNimatePrefix(string)    "[NZK NaNimate] " + message
     NZK.S.Head(string,char) / S.Tail(string,char)                        (NEW)
     NZK.E.PC(string,string)            Path.Combine
-    NZK.P.Pa(string)                   absolute from project-relative
-    NZK.P.Sn(string)                   leaf name without extension
-    NZK.San.Sanitize/Safe/Enc          asset-name safety
+    NZK.S.P.Abs(string)                absolute from project-relative
+    NZK.S.P.Leaf(string)               leaf name without extension
+    NZK.S.S.An(string)                 asset-name safety (allowlist + $hex)
+    NZK.S.S.AssetPath(string,string,int)  sanitized asset-leaf path
     NZK.T.Tp(Transform)/Tpr(Transform) transform path root-exclusive/inclusive
     NZK.L.IsEmpty/NotEmpty/Unique      collection + name helpers
     NZK.E.D.Lg/LgErr/LgWarn/LgIf       rr-code console logging

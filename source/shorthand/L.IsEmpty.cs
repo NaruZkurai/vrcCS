@@ -2,6 +2,11 @@ namespace NZK{  public static partial class L{
   /// <summary>
   /// True when an array has no usable elements.
   ///
+  /// NAME: L = List/collection helpers. IsEmpty/NotEmpty/Unique are spelled
+  /// out IN FULL here, unlike Pa/Sa/Sn, because they are predicates read as
+  /// sentences at the call site - `L.IsEmpty(a)` - where a two-letter form
+  /// would hurt more than it compressed.
+  ///
   /// Null and empty are treated identically because the Unity APIs that
   /// produce these arrays (mesh.boneWeights, mesh.bindposes, renderer.bones)
   /// return either depending on whether the channel was ever authored, and

@@ -102,7 +102,7 @@ namespace NZK.NaNimate
         /* Absolute sidecar path for a given model asset path. */
         public static string SidecarPathFor(string modelAssetPath)
         {
-            return NZK.P.Pa(modelAssetPath) + Suffix;
+            return NZK.S.P.Abs(modelAssetPath) + Suffix;
         }
 
         public static bool Exists(string modelAssetPath)
@@ -364,10 +364,10 @@ namespace NZK.NaNimate
 
         /* Project-relative form of an absolute path under this project.
          *
-         * The inverse of NZK.P.Pa. Deliberately kept here rather than beside Pa:
-         * the only caller is Save, which needs the AssetDatabase-facing spelling
-         * of a path it just wrote to disk. NZK.P.Pa is the direction everything
-         * else needs.
+         * The inverse of NZK.S.P.Abs. Deliberately kept here rather than
+         * beside it: the only caller is Save, which needs the
+         * AssetDatabase-facing spelling of a path it just wrote to disk.
+         * NZK.S.P.Abs is the direction everything else needs.
          */
         static string ToProjectRelative(string absolutePath)
         {

@@ -95,14 +95,14 @@ namespace NZK.NaNimate
             if (NZK.B.NoE(modelAssetPath))
                 return null;
 
-            string absoluteModel = NZK.P.Pa(modelAssetPath);
+            string absoluteModel = NZK.S.P.Abs(modelAssetPath);
 
             /* Already a .blend - use it directly. */
             if (NZK.S.EndsWithOIC(absoluteModel, ".blend") && System.IO.File.Exists(absoluteModel))
                 return absoluteModel;
 
             /* Sibling .blend sharing the model's base name (fbx -> blend). */
-            string baseName = NZK.P.Sn(absoluteModel);
+            string baseName = NZK.S.P.Leaf(absoluteModel);
             string directory = System.IO.Path.GetDirectoryName(absoluteModel);
             if (!NZK.B.NoE(directory) && System.IO.Directory.Exists(directory))
             {

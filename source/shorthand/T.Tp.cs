@@ -2,6 +2,10 @@ namespace NZK{  public static partial class T{
   /// <summary>
   /// Stable path identity for a UnityEngine.Transform, RELATIVE TO THE ROOT.
   ///
+  /// NAME: T.Tp = Transform.TPath. T is the Transform-helper class
+  /// (sibling: Tpr, Transform Path Root-inclusive). Tp/Tpr differ only by
+  /// whether the root segment is included.
+  ///
   /// The root's own name is deliberately EXCLUDED. A clone's root is renamed
   /// after instantiation, and the source root's name comes from the .blend
   /// import, so including it made every source/clone path pair mismatch at

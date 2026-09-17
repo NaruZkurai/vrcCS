@@ -208,7 +208,7 @@ public sealed class NZKNaNimateWeightImporter : UnityEditor.AssetPostprocessor
 
             NZK.NaNimate.NZKNaNimateWeightNormalizer.Result result =
                 NZK.NaNimate.NZKNaNimateWeightNormalizer.NormalizeModel(
-                    path, NZK.E.PC(folder, NZK.P.Sn(path) + ".meshes"));
+                    path, NZK.E.PC(folder, NZK.S.P.Leaf(path) + ".meshes"));
 
             if (!result.success)
             {

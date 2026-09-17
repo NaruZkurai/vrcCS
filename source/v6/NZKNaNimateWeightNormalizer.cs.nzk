@@ -114,7 +114,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
         if(renderers.Length==0){result.error="No UnityEngine.SkinnedMeshRenderer found in "+modelAssetPath;return result;}
 
         if(NZK.B.NoE(outputFolder)){
-            string avatar=NZK.P.Sn(modelAssetPath);
+            string avatar=NZK.S.P.Leaf(modelAssetPath);
             outputFolder=NZKNaNimateMeshFolder.FolderFor(modelAssetPath,avatar);
         }
 
@@ -470,7 +470,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
     /* ---- path helpers ---------------------------------------------------- */
 
     static string UniqueLeafPath(string folder,string meshName,System.Collections.Generic.HashSet<string> used){
-        string baseName=NZKNaNimateMeshFolder.Sanitize(meshName);
+        string baseName=NZK.S.S.An(meshName);
         string name=baseName;
         int suffix=1;
 

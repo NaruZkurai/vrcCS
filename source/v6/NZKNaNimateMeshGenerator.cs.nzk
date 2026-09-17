@@ -98,7 +98,7 @@ public static class NZKNaNimateMeshGenerator{
 
     /* Throw unless the project-relative folder exists on disk. */
     static void ThrowIfFolderMissing(string projectRelativeFolder){
-        string absolute=NZK.P.Pa(projectRelativeFolder);
+        string absolute=NZK.S.P.Abs(projectRelativeFolder);
 
         if(!System.IO.Directory.Exists(absolute))
             throw new System.Exception("folder was not created: "+projectRelativeFolder+
@@ -107,7 +107,7 @@ public static class NZKNaNimateMeshGenerator{
 
     /* Throw unless the project-relative asset file exists on disk. */
     static void ThrowIfFileMissing(string projectRelativeFile){
-        string absolute=NZK.P.Pa(projectRelativeFile);
+        string absolute=NZK.S.P.Abs(projectRelativeFile);
 
         if(!System.IO.File.Exists(absolute))
             throw new System.Exception("asset was not written: "+projectRelativeFile+
@@ -130,7 +130,7 @@ public static class NZKNaNimateMeshGenerator{
         var result=new Result();
 
         if(NZK.B.NoE(avatarName))
-            avatarName=NZK.P.Sn(modelAssetPath);
+            avatarName=NZK.S.P.Leaf(modelAssetPath);
 
         UnityEngine.GameObject source=
             UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(modelAssetPath);
@@ -203,7 +203,7 @@ public static class NZKNaNimateMeshGenerator{
             }
 
             payload.leaf=NZK.L.Unique(
-                NZK.San.Sanitize(renderers[i].name),usedNames);
+                NZK.S.S.An(renderers[i].name),usedNames);
             payload.rendererName=renderers[i].name;
             payload.rendererPath=NZK.T.Tp(renderers[i].transform);
             payload.sourceRenderer=renderers[i];
@@ -530,7 +530,7 @@ public static class NZKNaNimateMeshGenerator{
      * existing .meta rather than orphaning references.
      */
     static bool ReplaceAsset(string leafPath,UnityEngine.Mesh mesh){
-        if(System.IO.File.Exists(NZK.P.Pa(leafPath))){
+        if(System.IO.File.Exists(NZK.S.P.Abs(leafPath))){
             /*
              * DeleteAsset removes the file but leaves the .meta, so the GUID
              * survives and every existing reference still resolves.

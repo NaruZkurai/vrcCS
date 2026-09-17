@@ -127,7 +127,7 @@ public static class NZKNaNimateRemoteConsole{
                 string modelPath=parts[0];
                 string avatarName=parts.Length>1&&parts[1].Length>0
                     ? parts[1]
-                    : NZK.P.Sn(modelPath);
+                    : NZK.S.P.Leaf(modelPath);
 
                 UnityEngine.Debug.Log(NZK.S.NZKNaNimatePrefix("Remote console: generating for "+
                                       modelPath+" ("+avatarName+")"));
@@ -161,7 +161,7 @@ public static class NZKNaNimateRemoteConsole{
                  * have to know the output layout.
                  */
                 if(!NZK.S.EndsWithOIC(prefabPath,".prefab")){
-                    string avatar=NZK.P.Sn(prefabPath);
+                    string avatar=NZK.S.P.Leaf(prefabPath);
                     prefabPath=NZKNaNimateMeshFolder.PrefabFolderFor(prefabPath,avatar)+
                                  "/"+avatar+".prefab";
                 }
