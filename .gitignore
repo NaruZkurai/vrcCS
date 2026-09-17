@@ -2,3 +2,5 @@
 *.dll
 *.pdb
 testig/*.runtimeconfig.json
+# Pre-conversion originals, kept for reference only
+_bak_v6_originals/
