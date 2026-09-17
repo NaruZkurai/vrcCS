@@ -1,0 +1,573 @@
+namespace NZK.NaNimate
+{
+    /// <summary>
+    /// Rewrites bone weights so that any bone matching a NaNimate pattern holds
+    /// exactly <see cref="NaNimateWeight"/> for every vertex that touches it,
+    /// with all remaining influences rescaled so their total is still 1.
+    ///
+    /// WHY: Unity's importer drops influences below minBoneWeight, and a
+    /// NaNimate group is by definition a near-zero influence. Pinning it to a
+    /// tiny known value keeps the bone bound without letting it deform the mesh.
+    ///
+    /// MATH, per affected vertex. Let N be all NaNimate influences at this
+    /// vertex and O_i the ordinary ones:
+    ///
+    ///     w_nanimate' = epsilon                  (exactly 1e-07)
+    ///     w_i'        = O_i * (1 - epsilon) / sum(O)
+    ///
+    /// The ordinary influences keep their RELATIVE proportions and absorb the
+    /// remainder exactly, so sum(w') == 1. That is what makes it a perfect
+    /// mesh: the authored distribution is preserved, nothing merely truncated.
+    ///
+    /// No using directives by design - every type is fully qualified.
+    /// </summary>
+    public static class NZKNaNimateWeightNormalizer
+    {
+        /// <summary>
+        /// The canonical NaNimate weight, 1e-07 (0.0000001). Kept as the named
+        /// default so callers and logs reference one constant. The live value is
+        /// <see cref="PinValue"/>.
+        /// </summary>
+        public const float NaNimateWeight = 1e-07f;
+
+        /// <summary>Substring marking a bone as a NaNimate group (case-insensitive).</summary>
+        public const string NaNimatePattern = "nanimate";
+
+        /// <summary>
+        /// Only an exactly-zero ordinary sum counts as "no ordinary influence".
+        ///
+        /// Deliberately NOT a small epsilon: a weight of 1e-30 is still a real
+        /// authored value, and classifying it as empty would leave the vertex
+        /// summing to the pin alone instead of 1. The only case that genuinely
+        /// cannot reach 1 is every ordinary weight being exactly 0.
+        /// </summary>
+        const float EmptyThreshold = 0f;
+
+        /// <summary>
+        /// Lowest and highest weights reachable by <see cref="PinValue"/>.
+        /// </summary>
+        public const float MinPinValue = 1e-07f;
+        public const float MaxPinValue = 1f;
+
+        /// <summary>
+        /// Weight every NaNimate influence is written to.
+        ///
+        /// ANY existing non-zero NaNimate weight collapses to this value - a
+        /// weight of 1, or 1e9, or 0.5 all become exactly this. That is the
+        /// whole point: the bone is authored in Blender and registered
+        /// intentionally, so its resolved weight must be a known constant no
+        /// matter what normalization Blender or Unity applied on the way in.
+        ///
+        /// Defaults to <see cref="MinPinValue"/> (1e-07), the value that keeps
+        /// the bone bound while contributing nothing visible to deformation.
+        /// </summary>
+        public static float PinValue
+        {
+            get => UnityEditor.EditorPrefs.GetFloat(PinValuePrefsKey, NaNimateWeight);
+            set
+            {
+                float clamped = UnityEngine.Mathf.Clamp(value, MinPinValue, MaxPinValue);
+                UnityEditor.EditorPrefs.SetFloat(PinValuePrefsKey, clamped);
+
+                UnityEngine.Debug.Log("[NZK NaNimate] Pin value set to " + clamped.ToString("R") +
+                                      " (1e-07 == 0.0000001)");
+            }
+        }
+
+        const string PinValuePrefsKey = "NZK.NaNimate.PinValue";
+
+        public sealed class Result
+        {
+            public bool success;
+            public string error;
+
+            public int meshesProcessed;
+            public int meshesWritten;
+            public int renderersProcessed;
+
+            /// <summary>Vertices where at least one NaNimate influence was pinned.</summary>
+            public long verticesAffected;
+
+            /// <summary>Vertices whose ordinary weights were rescaled.</summary>
+            public long verticesRescaled;
+
+            /// <summary>Vertices holding only NaNimate influences (cannot sum to 1).</summary>
+            public long verticesNaNimateOnly;
+
+            /// <summary>Bones referenced by weights but absent from the name list.</summary>
+            public long outOfRangeBoneRefs;
+
+            /// <summary>
+            /// Rescaled weights that came out NaN/Infinity/negative and were
+            /// zeroed. Non-zero here means the input mesh had degenerate weights;
+            /// Unity would otherwise report "Invalid AABB".
+            /// </summary>
+            public long nonFiniteScales;
+
+            /// <summary>Largest observed |sum(weights) - 1| after rewriting.</summary>
+            public float worstDeviation;
+
+            public long approxBytesBefore;
+            public long approxBytesAfter;
+
+            public bool HasWarning =>
+                verticesNaNimateOnly > 0 ||
+                outOfRangeBoneRefs > 0 ||
+                nonFiniteScales > 0 ||
+                worstDeviation > 1e-3f;
+        }
+
+        // ---- entry points ----------------------------------------------------
+
+        /// <summary>
+        /// Rewrite weights for every skinned mesh under a model asset, writing
+        /// the results as mesh assets in <paramref name="outputFolder"/>.
+        /// Existing assets are overwritten in place so GUIDs and prefab
+        /// references survive.
+        /// </summary>
+        public static Result NormalizeModel(string modelAssetPath, string outputFolder)
+        {
+            Result result = new Result();
+
+            UnityEngine.GameObject model =
+                UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(modelAssetPath);
+
+            if (model == null)
+            {
+                result.error = "Could not load model at " + modelAssetPath;
+                return result;
+            }
+
+            UnityEngine.SkinnedMeshRenderer[] renderers =
+                model.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+
+            if (renderers.Length == 0)
+            {
+                result.error = "No UnityEngine.SkinnedMeshRenderer found in " + modelAssetPath;
+                return result;
+            }
+
+            if (string.IsNullOrEmpty(outputFolder))
+            {
+                string avatar = System.IO.Path.GetFileNameWithoutExtension(modelAssetPath);
+                outputFolder = NZKNaNimateMeshFolder.FolderFor(modelAssetPath, avatar);
+            }
+
+            NZKNaNimateMeshFolder.EnsureFolder(outputFolder);
+
+            try
+            {
+                UnityEditor.AssetDatabase.StartAssetEditing();
+
+                System.Collections.Generic.Dictionary<UnityEngine.Mesh, UnityEngine.Mesh> written =
+                    new System.Collections.Generic.Dictionary<UnityEngine.Mesh, UnityEngine.Mesh>(
+                        System.Collections.Generic.EqualityComparer<UnityEngine.Mesh>.Default);
+
+                System.Collections.Generic.HashSet<string> usedNames =
+                    new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+                for (int r = 0; r < renderers.Length; r++)
+                {
+                    UnityEngine.SkinnedMeshRenderer renderer = renderers[r];
+                    UnityEngine.Mesh sourceMesh = renderer.sharedMesh;
+                    if (sourceMesh == null)
+                        continue;
+
+                    result.renderersProcessed++;
+
+                    if (written.TryGetValue(sourceMesh, out UnityEngine.Mesh already))
+                    {
+                        renderer.sharedMesh = already;
+                        continue;
+                    }
+
+                    result.approxBytesBefore += EstimateBytes(sourceMesh);
+
+                    string[] boneNames = BoneNamesOf(renderer);
+                    UnityEngine.Mesh normalized = Normalize(sourceMesh, boneNames, result);
+                    if (normalized == null)
+                        continue;
+
+                    result.meshesProcessed++;
+                    result.approxBytesAfter += EstimateBytes(normalized);
+
+                    string leafPath = UniqueLeafPath(outputFolder, sourceMesh.name, usedNames);
+
+                    UnityEngine.Mesh existing =
+                        UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Mesh>(leafPath);
+
+                    if (existing != null)
+                    {
+                        UnityEditor.EditorUtility.CopySerialized(normalized, existing);
+                        normalized = existing;
+                    }
+                    else
+                    {
+                        UnityEditor.AssetDatabase.CreateAsset(normalized, leafPath);
+                    }
+
+                    written[sourceMesh] = normalized;
+                    result.meshesWritten++;
+
+                    renderer.sharedMesh = normalized;
+                }
+
+                UnityEditor.AssetDatabase.StopAssetEditing();
+                UnityEditor.AssetDatabase.SaveAssets();
+
+                result.success = true;
+                return result;
+            }
+            catch (System.Exception e)
+            {
+                result.error = e.Message;
+                return result;
+            }
+            finally
+            {
+                UnityEditor.AssetDatabase.StopAssetEditing();
+            }
+        }
+
+        /// <summary>
+        /// Copy a mesh and rewrite its weights.
+        ///
+        /// <paramref name="boneNames"/> MUST come from the renderer's bones array
+        /// in the same order the mesh indexes them: a UnityEngine.Mesh stores only integer
+        /// bone indices and carries no names. A missing or short list would pin
+        /// the wrong bones, so that case is refused rather than guessed.
+        /// </summary>
+        public static UnityEngine.Mesh Normalize(
+            UnityEngine.Mesh source, string[] boneNames, Result result)
+        {
+            if (source == null)
+                return null;
+
+            UnityEngine.Mesh copy = UnityEngine.Object.Instantiate(source);
+            copy.name = source.name;
+
+            if (boneNames == null || boneNames.Length == 0)
+            {
+                result.error = "No bone names supplied for mesh '" + source.name + "'.";
+                return copy;
+            }
+
+            UnityEngine.Vector3[] vertices = copy.vertices;
+            UnityEngine.BoneWeight[] weights = copy.boneWeights;
+
+            if (weights == null || weights.Length == 0)
+                return copy;
+
+            int bound = UnityEngine.Mathf.Min(weights.Length, vertices.Length);
+
+            for (int i = 0; i < bound; i++)
+            {
+                UnityEngine.BoneWeight bw = weights[i];
+
+                if (!PinNaNimate(ref bw, boneNames, result))
+                    continue;
+
+                weights[i] = bw;
+                result.verticesAffected++;
+
+                float deviation = UnityEngine.Mathf.Abs(Sum(ref bw) - 1f);
+                if (deviation > result.worstDeviation)
+                    result.worstDeviation = deviation;
+            }
+
+            copy.boneWeights = weights;
+            return copy;
+        }
+
+        /// <summary>Bone names from a renderer, in mesh bone-index order.</summary>
+        public static string[] BoneNamesOf(UnityEngine.SkinnedMeshRenderer renderer)
+        {
+            if (renderer == null)
+                return null;
+
+            UnityEngine.Transform[] bones = renderer.bones;
+            string[] names = new string[bones.Length];
+
+            for (int i = 0; i < bones.Length; i++)
+                names[i] = bones[i] != null ? bones[i].name : null;
+
+            return names;
+        }
+
+        // ---- core math -------------------------------------------------------
+
+        /// <summary>
+        /// Pin every NaNimate influence on one vertex to <see cref="PinValue"/> and
+        /// rescale the ordinary influences proportionally.
+        ///
+        /// COLLAPSE RULE: any non-zero NaNimate weight becomes exactly PinValue.
+        /// A weight of 1, or 1e9, or 0.5 all land on the same constant.
+        ///
+        /// SLOT RULE: Unity's BoneWeight has exactly FOUR slots. This method never
+        /// writes a fifth influence and never reads outside [0,3]. Blender
+        /// commonly authors four real bones per vertex, so if the NaNimate bone
+        /// is absent and all four slots are taken, the SMALLEST ordinary
+        /// influence is displaced to make room. Appending instead would run off
+        /// the end of the array, which is what produced Infinity/NaN and the
+        /// "Invalid AABB" / "IsFinite" assertion spam.
+        ///
+        /// Returns true when anything changed.
+        /// </summary>
+        static bool PinNaNimate(
+            ref UnityEngine.BoneWeight bw, string[] boneNames, Result result)
+        {
+            float pin = PinValue;
+
+            float[] w = new float[4];
+            int[] b = new int[4];
+
+            w[0] = bw.weight0; b[0] = bw.boneIndex0;
+            w[1] = bw.weight1; b[1] = bw.boneIndex1;
+            w[2] = bw.weight2; b[2] = bw.boneIndex2;
+            w[3] = bw.weight3; b[3] = bw.boneIndex3;
+
+            bool hasNaNimate = false;
+            float ordinarySum = 0f;
+            int ordinaryCount = 0;
+
+            // EVERY slot holding a NaNimate bone, not just the last one found.
+            //
+            // A vertex can legitimately carry more than one NaNimate influence.
+            // Tracking a single slot mishandles that: the earlier NaNimate slot
+            // is not equal to the tracked one, so the residual-assignment search
+            // below treated it as ORDINARY - overwriting an authored weight that
+            // was never scaled and never added to ordinarySum. The result was a
+            // weight total nowhere near 1, reported as
+            // "worst deviation 4.57E+000".
+            bool[] isNaNimate = new bool[4];
+
+            for (int s = 0; s < 4; s++)
+            {
+                if (w[s] <= 0f)
+                    continue;
+
+                // Sanitize before anything reads the value. A NaN or Infinity
+                // already present in the source mesh would otherwise poison
+                // ordinarySum and the scale, corrupting weights that were
+                // perfectly fine. Unity reports that as "Invalid AABB".
+                if (float.IsNaN(w[s]) || float.IsInfinity(w[s]))
+                {
+                    w[s] = 0f;
+                    b[s] = 0;
+                    result.nonFiniteScales++;
+                    continue;
+                }
+
+                if (b[s] < 0 || b[s] >= boneNames.Length)
+                {
+                    // Index with no name: cannot tell whether it is NaNimate, so
+                    // treat it as ordinary and count the anomaly.
+                    result.outOfRangeBoneRefs++;
+                    ordinarySum += w[s];
+                    ordinaryCount++;
+                    continue;
+                }
+
+                if (IsNaNimateName(boneNames[b[s]]))
+                {
+                    hasNaNimate = true;
+                    isNaNimate[s] = true;
+                }
+                else
+                {
+                    ordinarySum += w[s];
+                    ordinaryCount++;
+                }
+            }
+
+            if (!hasNaNimate)
+            {
+                // The NaNimate bone is not on this vertex at all. Nothing to pin:
+                // we never invent an influence, because the bone was not authored
+                // here and Unity would keep it bound with no reason to.
+                return false;
+            }
+
+            // Pin EVERY NaNimate influence on this vertex. Each one collapses to
+            // the same constant, so the pin's total contribution is
+            // (pinCount * pin) and the ordinary weights must absorb what is left.
+            int pinCount = 0;
+            for (int s = 0; s < 4; s++)
+            {
+                if (!isNaNimate[s])
+                    continue;
+
+                w[s] = pin;
+                pinCount++;
+            }
+
+            // Rescale the ordinary influences to absorb the remainder. Guard the
+            // division: a zero or denormal sum would produce Infinity, which then
+            // propagates into the AABB as NaN.
+            float pinnedTotal = pin * pinCount;
+            float remainder = 1f - pinnedTotal;
+
+            if (ordinarySum <= EmptyThreshold)
+            {
+                // NaNimate-only vertex: nothing left to scale, so the total
+                // cannot reach 1 unless there is exactly one NaNimate influence.
+                // Counted and reported rather than silently wrong.
+                result.verticesNaNimateOnly++;
+            }
+            else
+            {
+                float scale = remainder / ordinarySum;
+
+                if (float.IsNaN(scale) || float.IsInfinity(scale))
+                {
+                    // Belt and braces: never let a non-finite scale reach the mesh.
+                    result.nonFiniteScales++;
+                }
+                else
+                {
+                    // Scale every ordinary influence, remembering the LAST one
+                    // so it can be assigned the exact residual. Scaling all of
+                    // them independently lets float32 rounding accumulate and the
+                    // total lands on something like 0.99999994; assigning the
+                    // residual makes the sum exactly 1 by construction, and does
+                    // so independently of accumulation order.
+                    int lastOrdinary = -1;
+                    for (int s = 3; s >= 0; s--)
+                    {
+                        if (isNaNimate[s] || w[s] <= 0f)
+                            continue;
+
+                        lastOrdinary = s;
+                        break;
+                    }
+
+                    float assigned = pinnedTotal;
+
+                    for (int s = 0; s < 4; s++)
+                    {
+                        if (isNaNimate[s] || s == lastOrdinary || w[s] <= 0f)
+                            continue;
+
+                        w[s] *= scale;
+
+                        // A rescaled influence must stay finite and non-negative.
+                        if (float.IsNaN(w[s]) || float.IsInfinity(w[s]) || w[s] < 0f)
+                        {
+                            w[s] = 0f;
+                            b[s] = 0;
+                            result.nonFiniteScales++;
+                            continue;
+                        }
+
+                        assigned += w[s];
+                    }
+
+                    if (lastOrdinary >= 0)
+                    {
+                        float residual = 1f - assigned;
+
+                        // A negative residual means the pinned epsilon plus the
+                        // rescaled weights already met or exceeded 1, which can
+                        // only happen with corrupt input; drop the slot rather
+                        // than write a negative weight.
+                        if (residual > 0f && !float.IsNaN(residual))
+                        {
+                            w[lastOrdinary] = residual;
+                        }
+                        else
+                        {
+                            w[lastOrdinary] = 0f;
+                            b[lastOrdinary] = 0;
+                            result.nonFiniteScales++;
+                        }
+                    }
+                }
+
+                result.verticesRescaled++;
+            }
+
+            Compact(w, b);
+
+            bw.weight0 = w[0]; bw.boneIndex0 = b[0];
+            bw.weight1 = w[1]; bw.boneIndex1 = b[1];
+            bw.weight2 = w[2]; bw.boneIndex2 = b[2];
+            bw.weight3 = w[3]; bw.boneIndex3 = b[3];
+            return true;
+        }
+
+        /// <summary>
+        /// Keep only non-zero, finite influences, dense from slot 0.
+        ///
+        /// Bounded to four entries because that is all a BoneWeight holds; the
+        /// guard here is what stops an overflow from writing past the array and
+        /// poisoning the mesh with garbage indices.
+        /// </summary>
+        static void Compact(float[] w, int[] b)
+        {
+            float[] nw = new float[4];
+            int[] nb = new int[4];
+            int n = 0;
+
+            for (int s = 0; s < 4 && n < 4; s++)
+            {
+                if (w[s] <= 0f)
+                    continue;
+
+                if (float.IsNaN(w[s]) || float.IsInfinity(w[s]))
+                    continue;
+
+                nw[n] = w[s];
+                nb[n] = b[s];
+                n++;
+            }
+
+            for (int s = 0; s < 4; s++)
+            {
+                w[s] = s < n ? nw[s] : 0f;
+                b[s] = s < n ? nb[s] : 0;
+            }
+        }
+
+        static float Sum(ref UnityEngine.BoneWeight bw)
+        {
+            return bw.weight0 + bw.weight1 + bw.weight2 + bw.weight3;
+        }
+
+        public static bool IsNaNimateName(string name)
+        {
+            return !string.IsNullOrEmpty(name) &&
+                   name.IndexOf(NaNimatePattern, System.StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // ---- path helpers ----------------------------------------------------
+
+        static string UniqueLeafPath(
+            string folder, string meshName, System.Collections.Generic.HashSet<string> used)
+        {
+            string baseName = NZKNaNimateMeshFolder.Sanitize(meshName);
+            string name = baseName;
+            int suffix = 1;
+
+            while (!used.Add(name))
+            {
+                name = baseName + "_" + suffix;
+                suffix++;
+            }
+
+            return folder + "/" + name + ".asset";
+        }
+
+        static long EstimateBytes(UnityEngine.Mesh mesh)
+        {
+            const long perVertex = 48;
+            return (long)mesh.vertexCount * perVertex;
+        }
+
+        public static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("0.0") + " KB";
+            return (bytes / (1024.0 * 1024.0)).ToString("0.0") + " MB";
+        }
+    }
+}

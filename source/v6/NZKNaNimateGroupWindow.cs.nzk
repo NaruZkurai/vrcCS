@@ -1,0 +1,861 @@
+namespace NZK.NaNimate
+{
+    /// <summary>
+    /// Two-column window that sorts a model's source vertex groups into
+    /// NOT IMPORTED and IMPORTED, lets the user move them across, and saves the
+    /// result to "&lt;model&gt;.meta.nzk".
+    ///
+    /// Opening the window is the only scan trigger - Blender headless reads the
+    /// source .blend on demand, because probing a large blend is not cheap.
+    /// </summary>
+    public sealed class NZKNaNimateGroupWindow : UnityEditor.EditorWindow
+    {
+        const string Title = "NZK NaNimate Vertex Groups";
+
+        string _modelAssetPath;
+        UnityEngine.GameObject _modelRoot;
+
+        NZKNaNimateGroupScanner.ScanResult _scan;
+        NZKNaNimateGroupManifest _manifest;
+
+        readonly System.Collections.Generic.List<string> _notImported = new System.Collections.Generic.List<string>();
+        readonly System.Collections.Generic.List<string> _imported = new System.Collections.Generic.List<string>();
+
+        // Precomputed once per scan: group name -> source meshes that declare it.
+        // Rebuilt only when _scan changes, never during OnGUI.
+        readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>> _subMeshLookup =
+            new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>(System.StringComparer.OrdinalIgnoreCase);
+
+        // Filtered view caches, invalidated when the filter or column contents change.
+        System.Collections.Generic.List<string> _visibleNotImported = new System.Collections.Generic.List<string>();
+        System.Collections.Generic.List<string> _visibleImported = new System.Collections.Generic.List<string>();
+        string _cachedFilter;
+        bool _visibleDirty = true;
+
+        readonly System.Collections.Generic.HashSet<string> _expanded = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        UnityEngine.Vector2 _scrollLeft;
+        UnityEngine.Vector2 _scrollRight;
+        string _filter = string.Empty;
+        bool _dirty;
+        bool _scanned;
+
+        [UnityEditor.MenuItem("Tools/NZK/NaNimate/Vertex Group Mover")]
+        static void Open()
+        {
+            OpenForSelection();
+        }
+
+        // Right-click a model asset in the Project window.
+        const string AssetContextMenuPath = "Assets/NZK NaNimate/Vertex Groups…";
+
+        [UnityEditor.MenuItem(AssetContextMenuPath, true)]
+        static bool ValidateOpenFromAssetContext()
+        {
+            return !string.IsNullOrEmpty(SelectedModelPath());
+        }
+
+        [UnityEditor.MenuItem(AssetContextMenuPath)]
+        static void OpenFromAssetContext()
+        {
+            OpenForSelection();
+        }
+
+        // ---------------------------------------------------------------
+        // Right-click a model asset -> "Reimport with NaNimations".
+        //
+        // This performs the ENTIRE job synchronously and immediately:
+        //   1. reimports the model so the importer has fresh data
+        //   2. collect + write Meshes/*.asset and Prefabs/*.prefab
+        //
+        // It deliberately does NOT rely on AssetPostprocessor hooks, deferred
+        // delayCall/update callbacks, or any worker-thread hand-off. Those were
+        // the reason nothing ever appeared: OnPostprocessModel runs on a worker
+        // thread where main-thread scheduling does not fire, and the write step
+        // needs a legal (non-importing) AssetDatabase, which a menu click gives
+        // us directly.
+        // ---------------------------------------------------------------
+        const string ReimportMenuPath = "Assets/NZK NaNimate/Reimport with NaNimations";
+
+        [UnityEditor.MenuItem(ReimportMenuPath, true)]
+        static bool ValidateReimportWithNaNimations()
+        {
+            return !string.IsNullOrEmpty(SelectedModelPath());
+        }
+
+        [UnityEditor.MenuItem(ReimportMenuPath)]
+        static void ReimportWithNaNimations()
+        {
+            string modelPath = SelectedModelPath();
+
+            if (string.IsNullOrEmpty(modelPath))
+            {
+                UnityEditor.EditorUtility.DisplayDialog(
+                    Title, "Select a model asset (.blend / .fbx) in the Project window first.", "OK");
+                return;
+            }
+
+            string avatarName = System.IO.Path.GetFileNameWithoutExtension(modelPath);
+
+            // Deliberately NO forced reimport here.
+            //
+            // Forcing ImportAsset on the source model rewrites its import
+            // artifacts and, on a large .blend, risks Unity discarding the file
+            // when the importer reports an inconsistent result. The generator
+            // loads the already-imported model itself, so a forced reimport adds
+            // real risk and no benefit. The user can reimport from Unity's own
+            // menu if they actually want that.
+            if (!System.IO.File.Exists(System.IO.Path.GetFullPath(modelPath)))
+            {
+                // Guard against a stale/missing asset path before touching anything.
+                UnityEngine.Debug.LogError("[NZK NaNimate] Model not found on disk: " + modelPath);
+                UnityEditor.EditorUtility.DisplayDialog(
+                    Title, "Model not found on disk:\n\n" + modelPath, "OK");
+                return;
+            }
+
+            // Write the output on the main thread, outside any import. This is the
+            // whole point of the menu item.
+            NZK.NaNimate.NZKNaNimateMeshGenerator.Result result =
+                NZK.NaNimate.NZKNaNimateMeshGenerator.GenerateNow(modelPath, avatarName);
+
+            if (result == null || !result.success)
+            {
+                string message = result == null ? "generator returned null" : result.error;
+                UnityEngine.Debug.LogError("[NZK NaNimate] Reimport with NaNimations failed: " + message);
+                UnityEditor.EditorUtility.DisplayDialog(
+                    Title, "Generation failed:\n\n" + message, "OK");
+                return;
+            }
+
+            UnityEngine.Debug.Log("[NZK NaNimate] Reimport with NaNimations wrote " + result.meshCount +
+                                  " mesh(es) and prefab " + result.prefabPath);
+
+            UnityEditor.EditorUtility.DisplayDialog(
+                Title,
+                "Generated " + result.meshCount + " mesh(es).\n\n" +
+                result.meshesFolder + "\n" + result.prefabPath,
+                "OK");
+        }
+
+        /// <summary>Open the window for the currently selected model asset.</summary>
+        public static void OpenForSelection()
+        {
+            string path = SelectedModelPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                UnityEditor.EditorUtility.DisplayDialog(
+                    Title,
+                    "Select a model asset (.blend / .fbx) in the Project window first.",
+                    "OK");
+                return;
+            }
+
+            NZKNaNimateGroupWindow window = GetWindow<NZKNaNimateGroupWindow>();
+            window.titleContent = new UnityEngine.GUIContent(Title);
+            window.minSize = new UnityEngine.Vector2(640f, 360f);
+            window.SetTarget(path);
+            window.Show();
+        }
+
+        static string SelectedModelPath()
+        {
+            string[] guids = UnityEditor.Selection.assetGUIDs;
+            foreach (string guid in guids)
+            {
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path)) continue;
+
+                if (path.EndsWith(".blend", System.StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".fbx", System.StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".obj", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return path;
+                }
+            }
+
+            return null;
+        }
+
+        void SetTarget(string modelAssetPath)
+        {
+            _modelAssetPath = modelAssetPath;
+            _modelRoot = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(modelAssetPath);
+            _manifest = NZKNaNimateGroupManifest.Load(modelAssetPath);
+            _scan = null;
+            _scanned = false;
+            _dirty = false;
+            _expanded.Clear();
+            _notImported.Clear();
+            _imported.Clear();
+            _subMeshLookup.Clear();
+            InvalidateVisible();
+            Repaint();
+        }
+
+        void OnGUI()
+        {
+            DrawHeader();
+
+            if (string.IsNullOrEmpty(_modelAssetPath))
+            {
+                UnityEditor.EditorGUILayout.HelpBox(
+                    "No model selected. Select a .blend / .fbx in the Project window and reopen this window.",
+                    UnityEditor.MessageType.Info);
+                return;
+            }
+
+            if (!_scanned)
+            {
+                DrawScanPrompt();
+                return;
+            }
+
+            // Rebuild filtered views once per changed state, not once per UnityEngine.GUI event.
+            EnsureVisible();
+
+            DrawFilterBar();
+            DrawColumns();
+            DrawFooter();
+        }
+
+        void DrawHeader()
+        {
+            UnityEditor.EditorGUILayout.BeginHorizontal(UnityEditor.EditorStyles.toolbar);
+
+            using (new UnityEditor.EditorGUI.DisabledScope(true))
+            {
+                // Proportional so the path yields to the buttons as the window shrinks.
+                float pathWidth = UnityEngine.Mathf.Max(80f, position.width * 0.4f);
+                UnityEditor.EditorGUILayout.LabelField(
+                    string.IsNullOrEmpty(_modelAssetPath) ? "<no selection>" : _modelAssetPath,
+                    UnityEditor.EditorStyles.miniLabel,
+                    UnityEngine.GUILayout.Width(pathWidth));
+            }
+
+            UnityEngine.GUILayout.FlexibleSpace();
+
+            if (UnityEngine.GUILayout.Button("Rescan", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(70f)))
+                RunScan();
+
+            using (new UnityEditor.EditorGUI.DisabledScope(_scan == null || !_scan.success))
+            {
+                if (UnityEngine.GUILayout.Button("Reset", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(60f)))
+                    ResetToSource();
+            }
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+        }
+
+        void DrawScanPrompt()
+        {
+            UnityEditor.EditorGUILayout.Space(8f);
+
+            string blend = NZKNaNimateGroupScanner.ResolveSourceBlend(_modelAssetPath);
+            if (string.IsNullOrEmpty(blend))
+            {
+                UnityEditor.EditorGUILayout.HelpBox(
+                    "No source .blend found next to this model.\n\n" +
+                    "Expected a sibling .blend sharing the model's base name, or a single .blend " +
+                    "in the same folder. Place the source next to the model, then rescan.",
+                    UnityEditor.MessageType.Warning);
+            }
+            else
+            {
+                UnityEditor.EditorGUILayout.HelpBox(
+                    "Source blend:\n" + blend +
+                    "\n\nScanning runs Blender headless and may take a while on large files.",
+                    UnityEditor.MessageType.Info);
+            }
+
+            UnityEditor.EditorGUILayout.Space(4f);
+            using (new UnityEditor.EditorGUI.DisabledScope(string.IsNullOrEmpty(blend)))
+            {
+                if (UnityEngine.GUILayout.Button("Scan Source Vertex Groups", UnityEngine.GUILayout.Height(28f)))
+                    RunScan();
+            }
+        }
+
+        void RunScan()
+        {
+            if (string.IsNullOrEmpty(_modelAssetPath))
+                return;
+
+            try
+            {
+                UnityEditor.EditorUtility.DisplayProgressBar(Title, "Reading source .blend via Blender…", 0.5f);
+                _scan = NZKNaNimateGroupScanner.Scan(_modelAssetPath, _modelRoot);
+            }
+            finally
+            {
+                UnityEditor.EditorUtility.ClearProgressBar();
+            }
+
+            _scanned = true;
+
+            if (!_scan.success)
+            {
+                UnityEditor.EditorUtility.DisplayDialog(Title, "Scan failed:\n\n" + _scan.error, "OK");
+                Repaint();
+                return;
+            }
+
+            BuildSubMeshLookup();
+
+            if (_manifest == null || _manifest.groups.Count == 0)
+                ResetToSource();
+            else
+                ApplyManifestToColumns();
+
+            Repaint();
+        }
+
+        /// <summary>
+        /// Flatten the scan's per-mesh group lists into a single group -> meshes map.
+        /// Done once per scan so OnGUI never has to walk the mesh list.
+        /// </summary>
+        void BuildSubMeshLookup()
+        {
+            _subMeshLookup.Clear();
+            if (_scan == null || _scan.meshes == null)
+                return;
+
+            foreach (NZKNaNimateGroupScanner.SourceMesh mesh in _scan.meshes)
+            {
+                if (mesh.vertexGroups == null)
+                    continue;
+
+                foreach (string group in mesh.vertexGroups)
+                {
+                    if (!_subMeshLookup.TryGetValue(group, out System.Collections.Generic.List<string> meshes))
+                    {
+                        meshes = new System.Collections.Generic.List<string>();
+                        _subMeshLookup[group] = meshes;
+                    }
+
+                    if (!meshes.Contains(mesh.name))
+                        meshes.Add(mesh.name);
+                }
+            }
+        }
+
+        /// <summary>Stage every source group into the "not imported" column.</summary>
+        void ResetToSource()
+        {
+            _notImported.Clear();
+            _imported.Clear();
+
+            foreach (string group in _scan.AllGroups())
+            {
+                // Imported-bone presence wins as the initial sort; the manifest has
+                // not been consulted yet on a fresh reset.
+                if (_scan.importedBones.Contains(group))
+                    _imported.Add(group);
+                else
+                    _notImported.Add(group);
+            }
+
+            SortColumns();
+            _dirty = true;
+            InvalidateVisible();
+        }
+
+        /// <summary>Sort columns according to the saved manifest.</summary>
+        void ApplyManifestToColumns()
+        {
+            _notImported.Clear();
+            _imported.Clear();
+
+            foreach (string group in _scan.AllGroups())
+            {
+                if (_manifest.IsEnabled(group))
+                    _imported.Add(group);
+                else
+                    _notImported.Add(group);
+            }
+
+            SortColumns();
+            _dirty = false;
+            InvalidateVisible();
+        }
+
+        void DrawFilterBar()
+        {
+            UnityEditor.EditorGUILayout.BeginHorizontal(UnityEditor.EditorStyles.toolbar);
+
+            // Proportional label so the field grows with the window.
+            UnityEditor.EditorGUILayout.LabelField("Filter", UnityEngine.GUILayout.Width(position.width * 0.08f));
+            _filter = UnityEditor.EditorGUILayout.TextField(_filter, UnityEditor.EditorStyles.toolbarSearchField);
+
+            bool hasFilter = !string.IsNullOrEmpty(_filter);
+            using (new UnityEditor.EditorGUI.DisabledScope(!hasFilter))
+            {
+                if (UnityEngine.GUILayout.Button("Clear", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(50f)))
+                {
+                    _filter = string.Empty;
+                    InvalidateVisible();
+                    UnityEngine.GUI.FocusControl(null);
+                    UnityEngine.GUIUtility.ExitGUI();
+                }
+            }
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+        }
+
+        void DrawColumns()
+        {
+            // Proportional split: 1/2 minus half the gutter on each side, so both
+            // columns track the window instead of fighting for fixed space.
+            float gutter = 6f;
+            float columnWidth = UnityEngine.Mathf.Max(120f, (position.width - gutter) * 0.5f);
+
+            UnityEditor.EditorGUILayout.BeginHorizontal();
+
+            DrawColumn(
+                "NOT IMPORTED (" + _notImported.Count + ")",
+                _visibleNotImported,
+                _notImported,
+                moveRight: true,
+                columnWidth,
+                ref _scrollLeft);
+
+            UnityEngine.GUILayout.Space(gutter);
+
+            DrawColumn(
+                "IMPORTED (" + _imported.Count + ")",
+                _visibleImported,
+                _imported,
+                moveRight: false,
+                columnWidth,
+                ref _scrollRight);
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+        }
+
+        void DrawColumn(
+            string label,
+            System.Collections.Generic.List<string> visibleList,
+            System.Collections.Generic.List<string> sourceList,
+            bool moveRight,
+            float columnWidth,
+            ref UnityEngine.Vector2 scroll)
+        {
+            UnityEditor.EditorGUILayout.BeginVertical(UnityEngine.GUILayout.Width(columnWidth));
+
+            UnityEditor.EditorGUILayout.LabelField(label, UnityEditor.EditorStyles.boldLabel);
+            UnityEditor.EditorGUILayout.Space(2f);
+
+            // No element-based MinHeight here: it fights the scroll view during
+            // layout. ExpandHeight lets the scroll region absorb whatever is left.
+            scroll = UnityEditor.EditorGUILayout.BeginScrollView(
+                scroll,
+                false,
+                true,
+                UnityEngine.GUILayout.ExpandHeight(true),
+                UnityEngine.GUILayout.Width(columnWidth));
+
+            if (visibleList.Count == 0)
+            {
+                UnityEditor.EditorGUILayout.LabelField(
+                    string.IsNullOrWhiteSpace(_filter) ? "<empty>" : "<no matches>",
+                    UnityEditor.EditorStyles.miniLabel);
+            }
+
+            for (int i = 0; i < visibleList.Count; i++)
+            {
+                DrawGroupRow(visibleList[i], sourceList, moveRight, columnWidth);
+            }
+
+            UnityEditor.EditorGUILayout.EndScrollView();
+
+            // Bulk move for the whole (filtered) column.
+            string bulkLabel = moveRight ? "Move All →" : "← Move All";
+            using (new UnityEditor.EditorGUI.DisabledScope(visibleList.Count == 0))
+            {
+                if (UnityEngine.GUILayout.Button(bulkLabel))
+                {
+                    MoveGroups(visibleList, sourceList, moveRight);
+                    UnityEngine.GUIUtility.ExitGUI();
+                }
+            }
+
+            UnityEditor.EditorGUILayout.EndVertical();
+        }
+
+        void DrawGroupRow(string group, System.Collections.Generic.List<string> sourceList, bool moveRight, float columnWidth)
+        {
+            UnityEditor.EditorGUILayout.BeginHorizontal();
+
+            // Lookup is precomputed per scan, so this is a dictionary hit.
+            _subMeshLookup.TryGetValue(group, out System.Collections.Generic.List<string> subMeshes);
+            bool hasSubMeshes = subMeshes != null && subMeshes.Count > 0;
+            bool expanded = hasSubMeshes && _expanded.Contains(group);
+
+            // Fixed-size affordances are fine; only the label flexes.
+            const float chevronWidth = 16f;
+            const float arrowWidth = 26f;
+
+            if (hasSubMeshes)
+            {
+                if (UnityEngine.GUILayout.Button(expanded ? "▾" : "▸", UnityEditor.EditorStyles.label, UnityEngine.GUILayout.Width(chevronWidth)))
+                {
+                    if (expanded) _expanded.Remove(group);
+                    else _expanded.Add(group);
+                    UnityEngine.GUIUtility.ExitGUI();
+                    return;
+                }
+            }
+            else
+            {
+                UnityEngine.GUILayout.Space(chevronWidth);
+            }
+
+            // Truncate long names rather than letting them push the arrow off-column.
+            float labelWidth = UnityEngine.Mathf.Max(40f, columnWidth - chevronWidth - arrowWidth - 28f);
+            UnityEditor.EditorGUILayout.LabelField(group, UnityEngine.GUILayout.Width(labelWidth));
+
+            if (UnityEngine.GUILayout.Button(moveRight ? "→" : "←", UnityEngine.GUILayout.Width(arrowWidth)))
+            {
+                MoveGroups(new[] { group }, sourceList, moveRight);
+                UnityEngine.GUIUtility.ExitGUI();
+                return;
+            }
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+
+            if (expanded)
+            {
+                // Per-submesh rows. The down arrow removes the group from that
+                // mesh alone, leaving the group enabled on the others.
+                UnityEditor.EditorGUI.indentLevel++;
+                for (int i = 0; i < subMeshes.Count; i++)
+                    DrawSubMeshRow(group, subMeshes[i], columnWidth);
+                UnityEditor.EditorGUI.indentLevel--;
+            }
+        }
+
+        void DrawSubMeshRow(string group, string meshName, float columnWidth)
+        {
+            bool meshEnabled = _manifest != null && _manifest.IsMeshEnabled(group, meshName);
+
+            UnityEditor.EditorGUILayout.BeginHorizontal();
+
+            // Disabled rows are dimmed and prefixed so state reads at a glance.
+            UnityEngine.Color previous = UnityEngine.GUI.color;
+            if (!meshEnabled)
+                UnityEngine.GUI.color = new UnityEngine.Color(previous.r, previous.g, previous.b, 0.45f);
+
+            string marker = meshEnabled ? "• " : "✕ ";
+            float indent = UnityEngine.Mathf.Max(40f, columnWidth * 0.72f);
+            UnityEditor.EditorGUILayout.LabelField(marker + meshName, UnityEditor.EditorStyles.miniLabel, UnityEngine.GUILayout.Width(indent));
+
+            UnityEngine.GUI.color = previous;
+
+            if (meshEnabled)
+            {
+                if (UnityEngine.GUILayout.Button("↓", UnityEditor.EditorStyles.miniButton, UnityEngine.GUILayout.Width(22f)))
+                {
+                    SetMeshEnabled(group, meshName, false);
+                    UnityEngine.GUIUtility.ExitGUI();
+                    return;
+                }
+            }
+            else
+            {
+                if (UnityEngine.GUILayout.Button("↑", UnityEditor.EditorStyles.miniButton, UnityEngine.GUILayout.Width(22f)))
+                {
+                    SetMeshEnabled(group, meshName, true);
+                    UnityEngine.GUIUtility.ExitGUI();
+                    return;
+                }
+            }
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+        }
+
+        void SetMeshEnabled(string group, string meshName, bool enabled)
+        {
+            if (_manifest == null)
+                _manifest = new NZKNaNimateGroupManifest();
+
+            _manifest.SetMeshEnabled(group, meshName, enabled);
+            _dirty = true;
+            Repaint();
+        }
+
+        /// <summary>Drop the cached filtered lists so they rebuild on next layout.</summary>
+        void InvalidateVisible()
+        {
+            _visibleDirty = true;
+        }
+
+        /// <summary>Rebuild filtered views only when the filter or columns changed.</summary>
+        void EnsureVisible()
+        {
+            bool filterChanged = !string.Equals(_cachedFilter, _filter, System.StringComparison.Ordinal);
+            if (!_visibleDirty && !filterChanged)
+                return;
+
+            _cachedFilter = _filter;
+            _visibleDirty = false;
+
+            BuildVisible(_notImported, _visibleNotImported);
+            BuildVisible(_imported, _visibleImported);
+        }
+
+        void BuildVisible(System.Collections.Generic.List<string> source, System.Collections.Generic.List<string> target)
+        {
+            target.Clear();
+
+            bool filtering = !string.IsNullOrWhiteSpace(_filter);
+            for (int i = 0; i < source.Count; i++)
+            {
+                if (!filtering ||
+                    source[i].IndexOf(_filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    target.Add(source[i]);
+                }
+            }
+        }
+
+        void MoveGroups(System.Collections.Generic.IEnumerable<string> groups, System.Collections.Generic.List<string> sourceList, bool moveRight)
+        {
+            System.Collections.Generic.List<string> moving =
+                groups as System.Collections.Generic.List<string>;
+
+            if (moving == null)
+            {
+                moving = new System.Collections.Generic.List<string>();
+                foreach (string g in groups)
+                    moving.Add(g);
+            }
+            if (moving.Count == 0)
+                return;
+
+            for (int i = 0; i < moving.Count; i++)
+            {
+                string group = moving[i];
+                sourceList.Remove(group);
+
+                if (moveRight) _imported.Add(group);
+                else _notImported.Add(group);
+            }
+
+            SortColumns();
+            _dirty = true;
+            InvalidateVisible();
+            Repaint();
+        }
+
+        void SortColumns()
+        {
+            _notImported.Sort(System.StringComparer.OrdinalIgnoreCase);
+            _imported.Sort(System.StringComparer.OrdinalIgnoreCase);
+        }
+
+        void DrawFooter()
+        {
+            UnityEditor.EditorGUILayout.Space(4f);
+            UnityEditor.EditorGUILayout.BeginHorizontal(UnityEditor.EditorStyles.toolbar);
+
+            string sidecar = NZKNaNimateGroupManifest.SidecarPathFor(_modelAssetPath);
+            string status = _dirty ? "● unsaved" : "saved";
+            UnityEditor.EditorGUILayout.LabelField(status + "  →  " + sidecar, UnityEditor.EditorStyles.miniLabel);
+
+            UnityEngine.GUILayout.FlexibleSpace();
+
+            using (new UnityEditor.EditorGUI.DisabledScope(!_dirty))
+            {
+                if (UnityEngine.GUILayout.Button("Save", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(80f)))
+                {
+                    SaveManifest(apply: true);
+                    UnityEngine.GUIUtility.ExitGUI();
+                }
+            }
+
+            if (UnityEngine.GUILayout.Button("Save Only", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(80f)))
+            {
+                SaveManifest(apply: false);
+                UnityEngine.GUIUtility.ExitGUI();
+            }
+
+            if (UnityEngine.GUILayout.Button("Freeze Meshes", UnityEditor.EditorStyles.toolbarButton, UnityEngine.GUILayout.Width(110f)))
+            {
+                FreezeMeshes();
+                UnityEngine.GUIUtility.ExitGUI();
+            }
+
+            UnityEditor.EditorGUILayout.EndHorizontal();
+
+            if (_scan != null && _scan.success)
+            {
+                int total = _notImported.Count + _imported.Count;
+                UnityEditor.EditorGUILayout.LabelField(
+                    total + " source group(s) · " +
+                    _scan.meshes.Count + " source mesh(es) · " +
+                    "source: " + System.IO.Path.GetFileName(_scan.blendPath ?? "<none>"),
+                    UnityEditor.EditorStyles.miniLabel);
+            }
+        }
+
+        void SaveManifest(bool apply)
+        {
+            _manifest.sourceGuid = UnityEditor.AssetDatabase.AssetPathToGUID(_modelAssetPath);
+
+            // Only persist groups the user actually wants imported; rebuild the
+            // list so removals in the UI are reflected on disk.
+            var rebuilt = new NZKNaNimateGroupManifest
+            {
+                sourceGuid = _manifest.sourceGuid,
+                groups = new System.Collections.Generic.List<NZKNaNimateGroupManifest.Entry>(),
+            };
+
+            // Membership set avoids an O(n^2) Scan over _imported inside the loop.
+            var importedSet = new System.Collections.Generic.HashSet<string>(_imported, System.StringComparer.OrdinalIgnoreCase);
+
+            int count = _notImported.Count + _imported.Count;
+            var ordered = new System.Collections.Generic.List<string>(count);
+            ordered.AddRange(_notImported);
+            ordered.AddRange(_imported);
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                string group = ordered[i];
+
+                // Reuse the per-scan lookup instead of rescanning every mesh.
+                _subMeshLookup.TryGetValue(group, out System.Collections.Generic.List<string> subMeshes);
+
+                var entry = new NZKNaNimateGroupManifest.Entry(
+                    group,
+                    importedSet.Contains(group),
+                    null);
+
+                // Persist the per-submesh flags the user set with the down arrows.
+                if (subMeshes != null)
+                {
+                    for (int m = 0; m < subMeshes.Count; m++)
+                    {
+                        bool meshEnabled = _manifest.IsMeshEnabled(group, subMeshes[m]);
+                        entry.meshes.Add(new NZKNaNimateGroupManifest.MeshSelection(
+                            subMeshes[m], meshEnabled));
+                    }
+                }
+
+                rebuilt.groups.Add(entry);
+            }
+
+            string path = rebuilt.Save(_modelAssetPath);
+            _manifest = rebuilt;
+            _dirty = false;
+
+            UnityEngine.Debug.Log("[NZK NaNimate] Wrote manifest " + path +
+                      " (" + _imported.Count + " imported, " + _notImported.Count + " not imported).");
+
+            if (apply)
+            {
+                ReimportModel();
+            }
+            else
+            {
+                UnityEngine.Debug.Log("[NZK NaNimate] Manifest saved without reimport.");
+            }
+            Repaint();
+        }
+
+        void FreezeMeshes()
+        {
+            string avatarName = System.IO.Path.GetFileNameWithoutExtension(_modelAssetPath);
+
+            bool proceed = UnityEditor.EditorUtility.DisplayDialog(
+                Title,
+                "Freeze meshes for \"" + avatarName + "\"?\n\n" +
+                "This writes standalone UnityEngine.Mesh assets plus a self-contained prefab under:\n" +
+                "Assets/" + NZKNaNimateMeshFolder.FolderFor(_modelAssetPath, avatarName) + "\n\n" +
+                "The prefab duplicates the model hierarchy so Unity's importer can no longer " +
+                "rewrite the rig. Existing frozen output is overwritten in place.",
+                "Freeze",
+                "Cancel");
+
+            if (!proceed)
+                return;
+
+            NZKNaNimateMeshFreezer.Result freeze;
+            try
+            {
+                UnityEditor.EditorUtility.DisplayProgressBar(Title, "Freezing meshes…", 0.5f);
+                freeze = NZKNaNimateMeshFreezer.Freeze(_modelAssetPath, avatarName);
+            }
+            finally
+            {
+                UnityEditor.EditorUtility.ClearProgressBar();
+            }
+
+            if (!freeze.success)
+            {
+                UnityEngine.Debug.LogError("[NZK NaNimate] Freeze failed: " + freeze.error);
+                UnityEditor.EditorUtility.DisplayDialog(Title, "Freeze failed:\n\n" + freeze.error, "OK");
+                return;
+            }
+
+            UnityEngine.Debug.Log("[NZK NaNimate] Froze " + freeze.rendererCount + " renderer(s) / " +
+                      freeze.meshCount + " mesh(es), ~" +
+                      NZKNaNimateMeshFreezer.FormatBytes(freeze.approxBytes) +
+                      " → " + freeze.prefabPath);
+
+            if (freeze.HasWarning)
+            {
+                if (freeze.unmappedBones > 0)
+                {
+                    UnityEngine.Debug.LogWarning("[NZK NaNimate] " + freeze.unmappedBones +
+                                     " bone reference(s) could not be mapped into the clone " +
+                                     "(first: " + freeze.unmappedBoneSample + "). " +
+                                     "Those still point at the imported rig.");
+                }
+
+                if (freeze.unmappedRenderers > 0)
+                {
+                    UnityEngine.Debug.LogWarning("[NZK NaNimate] " + freeze.unmappedRenderers +
+                                     " source renderer(s) had no counterpart in the clone " +
+                                     "(first: " + freeze.unmappedRendererSample + "). " +
+                                     "Their meshes were NOT frozen.");
+                }
+            }
+
+            UnityEditor.EditorUtility.DisplayDialog(
+                Title,
+                "Frozen " + freeze.rendererCount + " renderer(s), " + freeze.meshCount + " mesh(es).\n\n" +
+                freeze.prefabPath +
+                (freeze.unmappedBones > 0
+                    ? "\n\nWARNING: " + freeze.unmappedBones + " bone(s) outside the cloned subtree."
+                    : string.Empty) +
+                (freeze.unmappedRenderers > 0
+                    ? "\n\nWARNING: " + freeze.unmappedRenderers + " renderer(s) unmatched; " +
+                      "their meshes were not frozen. First: " + freeze.unmappedRendererSample
+                    : string.Empty),
+                "OK");
+
+            UnityEditor.EditorGUIUtility.PingObject(
+                UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(freeze.prefabPath));
+        }
+
+        void ReimportModel()
+        {
+            UnityEditor.ModelImporter importer = UnityEditor.AssetImporter.GetAtPath(_modelAssetPath) as UnityEditor.ModelImporter;
+            if (importer == null)
+            {
+                UnityEngine.Debug.LogWarning("[NZK NaNimate] No UnityEditor.ModelImporter at " + _modelAssetPath +
+                                 "; skipped reimport.");
+                return;
+            }
+
+            importer.minBoneWeight = 0f;
+            importer.maxBonesPerVertex = 255;
+            importer.SaveAndReimport();
+
+            UnityEngine.Debug.Log("[NZK NaNimate] Reimported " + _modelAssetPath +
+                      " with minBoneWeight = 0 to pull in selected groups.");
+
+            _modelRoot = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(_modelAssetPath);
+            RunScan();
+        }
+    }
+}
