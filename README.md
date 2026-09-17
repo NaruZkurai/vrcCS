@@ -83,20 +83,52 @@ Originals are backed up to `Editor/_bak/*.cs.bak` before replacement.
 - Rationale/XML kept **verbatim** in meaning, but as `/* */` blocks only.
   A literal `*/` must never appear inside a comment body.
 - Trivial bodies reuse shorthand; prefer a shorthand helper over a buried local.
+- **Moderately complicated functions should be simple 1-liners.** A body that
+  is one expression, or one call plus a return, collapses onto the signature
+  line. Multi-step bodies (loops, several statements) stay expanded, but each
+  step should itself be a single line.
+- If a 1-liner would repeat an expression used elsewhere, it becomes a new
+  shorthand file instead — see `P.La` and `M.By`, extracted exactly because
+  two files needed the same logic.
 - `ll<N>` is the counted-or family (`B.ll2`…`B.ll5`, `B.llAny`, `B.llNll`).
+
+### Shorthand added during v6
+
+| file | member | purpose |
+|---|---|---|
+| `P.La.cs` | `P.La(folder,name,i)` | one frozen-mesh leaf path: `Combine(folder, Sanitize(name)+"_"+i+".asset")` |
+| `M.By.cs` | `M.Vb(mesh)` | estimated mesh bytes (`vertexCount * 48`) |
+| `M.By.cs` | `M.By(bytes)` | human-readable size, one decimal on KB/MB |
+| `M.By.cs` | `M.Mb(mesh)` | `M.By(M.Vb(mesh))` |
+
+`M.BytesPerVertex48` is the shared per-vertex budget, so the generator and the
+freezer cannot drift on what "48 bytes per vertex" means.
 
 ### Verified
 
 - Deployed tree: 19 split leaves + `delete.NzkJacketWeights.cs` = 20 `.cs`.
 - All repeated outer types (`NZKNaNimateMeshGenerator`, `…GroupScanner`,
   `…WeightNormalizer`, `…RemoteConsole`, `…MeshFreezer`) are `partial` and merge.
-- `unity-cli console --type error` → **0** `CS####` errors.
+- Shorthand in the project: 25 files (`vrcCS/build/shorthand/`).
+- `unity-cli console --type error` → **`[]`**.
 
-The 11 `CreateFolder is not supported while importing out-of-process` lines and
-the `GodRevenger` / `ShroomPet2` prefab-variant errors in the console are
-**stale/pre-existing** — the former was fixed by moving `EnsureFolder` to
-`System.IO.Directory.CreateDirectory` + `.meta` sidecars (`AssetDatabase.CreateFolder`
-is main-thread-only, and `Refresh` is a no-op during import).
+### The `CreateFolder` errors are gone — here is the proof
+
+Eleven `CreateFolder is not supported while importing out-of-process` lines used
+to appear in the console. They are **stale buffer replay**, not live failures:
+
+| step | result |
+|---|---|
+| `grep AssetDatabase.CreateFolder` across all of `Assets/**/*.cs` | **4 hits, all comments — zero real call sites** |
+| console cleared | `[]` |
+| `AssetDatabase.Refresh(ForceUpdate)` issued, full reimport | — |
+| `CreateFolder` errors after reimport | **0** |
+| console errors after reimport | **`[]`** |
+
+If nothing in the source calls `CreateFolder`, nothing can raise it. The fix is
+`EnsureFolder` → `System.IO.Directory.CreateDirectory` + hand-written `.meta`
+sidecars, because `AssetDatabase.CreateFolder` is main-thread-only and
+`AssetDatabase.Refresh` is a silent no-op during import.
 
 ## Split of duties
 

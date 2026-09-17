@@ -28,8 +28,6 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     public const string MeshesFolderName="Meshes";
     public const string PrefabsFolderName="Prefabs";
 
-    static readonly char DirSep=System.IO.Path.DirectorySeparatorChar;
-
     /* Bare file name of an asset path, without its extension. */
     static string LeafNameOf(string path){return NZK.P.Sn(path);}
 
@@ -37,31 +35,19 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     static string AvatarRoot(string avatarName){return GeneratedRootName+"/"+Sanitize(avatarName);}
 
     /* Project-relative folder for a model's frozen meshes. */
-    public static string FolderFor(string modelAssetPath,string avatarName){
-        if(NZK.B.NoE(avatarName)) avatarName=LeafNameOf(modelAssetPath);
-        return AvatarRoot(avatarName)+"/"+MeshesFolderName;
-    }
+    public static string FolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+MeshesFolderName;}
 
     /*
      * Project-relative folder for a model's generated prefabs, a sibling of
      * the Meshes folder under the same avatar root.
      */
-    public static string PrefabFolderFor(string modelAssetPath,string avatarName){
-        if(NZK.B.NoE(avatarName)) avatarName=LeafNameOf(modelAssetPath);
-        return AvatarRoot(avatarName)+"/"+PrefabsFolderName;
-    }
+    public static string PrefabFolderFor(string modelAssetPath,string avatarName){return AvatarRoot(NZK.B.NoE(avatarName)?LeafNameOf(modelAssetPath):avatarName)+"/"+PrefabsFolderName;}
 
     /* Project-relative path for one frozen mesh leaf. */
-    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){
-        string leaf=Sanitize(rendererName)+"_"+subMeshIndex;
-        return folder+"/"+leaf+".asset";
-    }
+    public static string LeafAssetPath(string folder,string rendererName,int subMeshIndex){return NZK.P.La(folder,rendererName,subMeshIndex);}
 
     /* Project-relative path for the frozen prefab. */
-    public static string PrefabPath(string folder,string avatarName){
-        if(NZK.B.NoE(avatarName)) avatarName="Avatar";
-        return folder+"/"+Sanitize(avatarName)+"Frozen.prefab";
-    }
+    public static string PrefabPath(string folder,string avatarName){return NZK.E.PC(folder,Sanitize(NZK.B.NoE(avatarName)?"Avatar":avatarName)+"Frozen.prefab");}
 
     /*
      * Ensure a project-relative folder exists.
@@ -102,10 +88,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     }
 
     /* Absolute filesystem path for a project-relative asset path. */
-    public static string AbsoluteFromProject(string projectRelative){
-        string root=System.IO.Directory.GetParent(UnityEngine.Application.dataPath).FullName;
-        return NZK.E.PC(root,(projectRelative??string.Empty).Replace('/',DirSep));
-    }
+    public static string AbsoluteFromProject(string projectRelative){return NZK.P.Pa(projectRelative);}
 
     /*
      * Write a folder's .meta when it is absent.
@@ -135,18 +118,13 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
     /* Stable 32-hex-char GUID for a project-relative path. */
     public static string DeterministicGuid(string projectRelativePath){
         byte[] bytes=Md5Of(projectRelativePath??string.Empty);
-
         var sb=new System.Text.StringBuilder(32);
         for(int i=0;i<bytes.Length;i++) sb.Append(bytes[i].ToString("x2"));
-
         return sb.ToString();
     }
 
     /* MD5 of a UTF-8 string; the reusable half of DeterministicGuid. */
-    static byte[] Md5Of(string s){
-        using(var md5=System.Security.Cryptography.MD5.Create())
-            return md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(s));
-    }
+    static byte[] Md5Of(string s){using(var md5=System.Security.Cryptography.MD5.Create()) return md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(s));}
 
     /*
      * Make a name safe to use as a Unity asset FILE name.
@@ -214,10 +192,7 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
      * reversible: a literal '$' in the source can never be confused with an
      * escape sequence.
      */
-    static void EncodeUnsafeChar(System.Text.StringBuilder sb,char c){
-        sb.Append('$');
-        sb.Append(((int)c).ToString("x2"));
-    }
+    static void EncodeUnsafeChar(System.Text.StringBuilder sb,char c){sb.Append('$');sb.Append(((int)c).ToString("x2"));}
 
     /*
      * True for characters permitted in a Unity asset file name.
@@ -227,23 +202,8 @@ namespace NZK.NaNimate{  public static class NZKNaNimateMeshFolder{
      * '$' is NOT safe - it is reserved as the escape marker.
      */
     static bool IsSafeAssetNameChar(char c){
-        if(c>='a'&&c<='z') return true;
-        if(c>='A'&&c<='Z') return true;
-        if(c>='0'&&c<='9') return true;
-
-        switch(c){
-            case ' ':
-            case '.':
-            case '-':
-            case '_':
-            case '(':
-            case ')':
-            case '[':
-            case ']':
-                return true;
-            default:
-                return false;
-        }
+        if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')) return true;
+        return c==' '||c=='.'||c=='-'||c=='_'||c=='('||c==')'||c=='['||c==']';
     }
   }
 }

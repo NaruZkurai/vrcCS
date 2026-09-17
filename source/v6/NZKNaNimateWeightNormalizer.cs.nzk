@@ -482,15 +482,8 @@ namespace NZK.NaNimate{  public static class NZKNaNimateWeightNormalizer{
         return folder+"/"+name+".asset";
     }
 
-    static long EstimateBytes(UnityEngine.Mesh mesh){
-        const long perVertex=48;
-        return (long)mesh.vertexCount*perVertex;
-    }
+    static long EstimateBytes(UnityEngine.Mesh mesh){return NZK.M.Vb(mesh);}
 
-    public static string FormatBytes(long bytes){
-        if(bytes<1024) return bytes+" B";
-        if(bytes<1024*1024) return (bytes/1024.0).ToString("0.0")+" KB";
-        return (bytes/(1024.0*1024.0)).ToString("0.0")+" MB";
-    }
+    public static string FormatBytes(long bytes){return NZK.M.By(bytes);}
   }
 }
