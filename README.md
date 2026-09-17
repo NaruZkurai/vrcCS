@@ -93,3 +93,84 @@ yes this project has some in it
 does it mater which ones i use?
 idk i swapp around alot. stuff like deepseek and qwen or other local stuff.
 i prefer 9b > anything coz its a good balence of fast to able to use tools
+
+# .cs.nzk shorthand format — spec for v6 conversion (2026-09-17)
+
+## Layout
+Flat file, NOT partial-leaf per type. One file per TOP-LEVEL TYPE:
+`namespace NZK{ public static partial class X{ ...MEMBERS... } }`
+
+## Compression rules in /nzk/git/vrcCS/source/shorthand/
+1. `namespace NZK{` — no newline after `{`; type opens on the SAME line.
+   Canonical opener: `namespace NZK{  public static partial class X{`
+2. ALL types fully qualified, NO `using` directives:
+   `System.Int32`, `System.String`, `UnityEngine.Mesh`, `UnityEditor.AssetDatabase`.
+   This is deliberate — see "No using directives by design" in the v6 sources.
+3. `public static` (not `internal static`), even for `static` helpers.
+4. Return types spelled fully qualified: `System.Int32`, `System.Boolean`.
+5. `return X;` written on the SAME lines as the signature where short — often
+   one line per member: `public static bool NoE(string a){return string.IsNullOrEmpty(a);}`
+6. Two-space indent inside `namespace`, braces often closed on one line:
+   `}}}` or `  }` + `  }`.
+7. Comments preserved when they carry meaning (see E.D.cs, ToINT.cs which keeps a
+   commented-out member).
+8. Generic helpers keep constraints: `where T : class`.
+9. `<T>` helpers are used to AVOID overload duplication.
+
+## Big-function/chunk guidance (user directive)
+Break large functions and `if` statements into REUSABLE CHUNKS held in VARIABLES,
+so the same expression is not repeated and each chunk can be referenced by name.
+Prefer a named local/helper over duplicating an expression.
+
+## USER RULES — comments and trivial bodies (2026-09-17)
+1. **COMMENTS: `/*style*/` ONLY.** No `///` XML doc blocks, no `//` line comments.
+   Convert XML docs to `/* ... */`, preserving the text verbatim.
+2. **TRIVIAL BODIES MUST REUSE SHORTHAND.** Do not re-implement what a shorthand file
+   already provides. Example the user gave:
+       return !string.IsNullOrEmpty(name)&&name.IndexOf(P,System.StringComparison.OrdinalIgnoreCase)>=0;
+   must become `NZK.S.HasOIC(name,P)`. If a body is one expression of framework calls,
+   look for a shorthand equivalent first.
+
+## SHORTHAND CATALOG (reuse before inventing)
+    NZK.B.NoE(string) / B.NllE(string) / B.Eq<T>(T,T) / B.EC<T> / B.I3eeI3<T>
+    NZK.S.Has(string)                  non-empty string
+    NZK.S.HasOIC(string,string)        case-insensitive Contains          (NEW)
+    NZK.S.StartsOIC(string,string)     case-insensitive StartsWith        (NEW)
+    NZK.S.EqOIC(string,string)         case-insensitive Equals, null-safe (NEW)
+    NZK.S.EndsWithOIC(string,string)   case-insensitive EndsWith
+    NZK.S.EndsAnyOIC(string,params string[])  any-of suffixes             (NEW)
+    NZK.S.NZKNaNimatePrefix(string)    "[NZK NaNimate] " + message
+    NZK.S.Head(string,char) / S.Tail(string,char)                        (NEW)
+    NZK.E.PC(string,string)            Path.Combine
+    NZK.P.Pa(string)                   absolute from project-relative
+    NZK.P.Sn(string)                   leaf name without extension
+    NZK.San.Sanitize/Safe/Enc          asset-name safety
+    NZK.T.Tp(Transform)/Tpr(Transform) transform path root-exclusive/inclusive
+    NZK.L.IsEmpty/NotEmpty/Unique      collection + name helpers
+    NZK.E.D.Lg/LgErr/LgWarn/LgIf       rr-code console logging
+    NZK.E.D.OK/OK<T>/NerrOK            rr-code dialogs
+
+Filename = `<Type>.<Member>.cs`, or `<Type>Name.cs` when the file holds a whole small type.
+Verified mapping:
+    AD.R.cs            -> class AD, member R
+    B.NoE.cs           -> class B, member NoE
+    B.Eq.cs            -> class B, member Eq
+    B.I3eeI3.cs        -> class B, member I3eeI3
+    E.D.cs             -> class E, nested class D
+    E.Dd.cs            -> class E, member Dd
+    S.pc.cs            -> class E, member PC   (note: name chosen for the CONCEPT)
+    ToINT.cs           -> class I, several To* methods (whole type in one file)
+    M.ec.cs            -> class B  (misnamed, pre-existing)
+Types are grouped by FIRST LETTER of purpose: B=Bool, S=String, E=Error, AD=AssetDatabase,
+I=Int/convert, M=Misc. A new utility type should pick a free letter and one file per member.
+
+## file.nzk format: Prefer NEW SHORTHAND FILES over buried locals
+Repeated non-trivial logic that could serve ANY toolkit file must become a NEW file in
+`/nzk/git/vrcCS/source/shorthand/`, named per the convention above — NOT inlined as a
+private local helper inside one file. Trivial 1-liners may stay inline.
+
+```
+namespace NZK{  public static partial class B{public static bool NoE(string a){return string.IsNullOrEmpty(a);}}
+  }
+```
+
