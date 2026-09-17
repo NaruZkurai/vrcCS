@@ -1,14 +1,10 @@
 {
-    "name": "NZK.Shorthand.Editor",
+    "name": "NZK.Shorthand.Runtime",
     "rootNamespace": "NZK",
-    "references": [
-        "NZK.Shorthand.Runtime"
-    ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "references": [],
+    "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": false,
+    "allowUnsafeCode": true,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
