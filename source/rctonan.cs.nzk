@@ -199,7 +199,7 @@ namespace NZK{public static partial class Core {public static partial class Menu
     string[] guids = UnityEditor.Selection.assetGUIDs;
     if (guids == null || guids.Length == 0)
     {
-      NZK.E.Dd("No Selection", "Select one or more animation clip files.", "OK");
+      NZK.E.D.Show("No Selection", "Select one or more animation clip files.", "OK");
       return;
     }
 
@@ -226,7 +226,7 @@ namespace NZK{public static partial class Core {public static partial class Menu
     string message = zeroScaleClips.Count > 0
       ? string.Join("\n", zeroScaleClips)
       : "No zero scale curves found.";
-    NZK.E.Dd("Zero Scale Animation Check",
+    NZK.E.D.Show("Zero Scale Animation Check",
         "Found zero scale curves in:\n" + message, "OK");
   }
 

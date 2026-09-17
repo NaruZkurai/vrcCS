@@ -38,7 +38,7 @@ public static partial class MenuItems
     }
     if (changed == 0) return;
     NZK.AD.R();
-    NZK.E.Dd("Fix Zero Scale Animations",
+    NZK.E.D.Show("Fix Zero Scale Animations",
       "Fixed " + changed + " animation clip(s).", "OK");
   }
   

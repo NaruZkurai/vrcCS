@@ -3,8 +3,6 @@
  *  NZK.S.E2
  *  NZK.S.E1
 */
-using System.Net.NetworkInformation;
-using System.Runtime.CompilerServices;
 /*add error code to output class*/
 namespace NZK
 { public static partial class E
