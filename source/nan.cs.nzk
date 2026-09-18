@@ -137,6 +137,62 @@ public static partial class Core {
         if (conv != null) { doc = conv; changed = true; }
         sb.Append(doc); }
       return changed ? sb.ToString() : null; }
+
+    /* ── POST-PROCESS: run the whole repair, in memory, no files written ──── */
+
+    /** <summary>Repair the avatar's nanimation weights in place, writing NOTHING
+     *  to disk about it.
+     *
+     *  This is the same repair the "Fix Off-Armature Weights" menu item runs, so
+     *  the manual fix and the build fix cannot drift.  It is the manual fix with
+     *  the file-saving removed:
+     *
+     *    - Weights are written to a SCENE-LOCAL mesh instance the renderer owns,
+     *      never to the .asset on disk.  That is what makes it safe mid-build:
+     *      the pipeline serialises whatever the renderer references, so the fix
+     *      ships with the build without any asset being modified.
+     *    - Source objects under HB_Sources are skipped, because they hold the
+     *      weights this reads FROM.
+     *    - No AssetDatabase call of any kind.  The menu path marks dirty and
+     *      saves for the user's benefit; here that would dirty the project and
+     *      force reimports on every upload.
+     *
+     *  ORDER, and why it is this order:
+     *   1. bone weights, so every vertex ends with the nanimation bone pinned at
+     *      slot 0 and at most three real influences beside it;
+     *   2. the clip scale fixup, so a generated .anim that still holds "0" gets
+     *      NaN - a clip that animates scale to 0 collapses geometry to a point
+     *      rather than discarding it, which looks wrong rather than hidden.
+     *
+     *  Returns the number of vertices changed.  Never throws: a build hook that
+     *  throws blocks the upload, and a failed repair is better reported than
+     *  fatal.</summary> */
+    public static System.Int32 PostProcess(UnityEngine.GameObject avatarRoot)
+    { if (avatarRoot == null) return 0;
+      System.Int32 changed = 0;
+      try
+      { changed = NZK.Core.NanRelink.RelinkSelection(new UnityEngine.GameObject[] { avatarRoot },true); }
+      catch (System.Exception e)
+      { UnityEngine.Debug.LogError("[Nan.PostProcess] weight repair failed: " + e); }
+
+      /* Clip fixup.  Runs over the generated clips only - FixAnimationClipScale
+         needs a real asset path to patch the text, so a clip that is not an
+         asset is skipped there rather than failing here. */
+      try
+      { var clips = UnityEngine.Resources.FindObjectsOfTypeAll<UnityEngine.AnimationClip>();
+        System.Int32 n = 0;
+        foreach (var c in clips)
+        { if (c == null) continue;
+          System.String p = UnityEditor.AssetDatabase.GetAssetPath(c);
+          if (System.String.IsNullOrEmpty(p)) continue;
+          if (!NZK.S.HasOIC(p,"NaN")) continue;   /* only the generated nanimation clips */
+          if (NZK.Core.NaNimate.Fix.FixAnimationClipScale(c)) n++; }
+        if (n > 0) UnityEngine.Debug.Log("[Nan.PostProcess] rewrote zero->NaN scale in " + n + " clip(s)."); }
+      catch (System.Exception e)
+      { UnityEngine.Debug.LogError("[Nan.PostProcess] clip fixup failed: " + e); }
+
+      UnityEngine.Debug.Log("[Nan.PostProcess] repaired " + changed + " vertex/vertices for '" + avatarRoot.name + "'.");
+      return changed; }
   }
 }
 }

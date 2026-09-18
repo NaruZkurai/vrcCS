@@ -1,0 +1,127 @@
+/* ==========================================================================
+ * NZK.NanBuildHook — runs the nanimation weight repair during avatar upload.
+ *
+ * WHY THIS EXISTS
+ *   The repair was a menu item the user had to remember to click before every
+ *   upload.  Forget it and the avatar ships with vertices that are not bound to
+ *   their nanimation bone, so toggles silently stop hiding anything - a failure
+ *   with no error and no visual cue until someone notices an accessory that will
+ *   not turn off.  Running it as a build callback removes the "remember to"
+ *   from the process entirely.
+ *
+ * WHAT IT DOES
+ *   Calls NZK.Core.Nan.PostProcess, which is the SAME repair the menu item runs.
+ *   There is deliberately only one implementation: the menu and the build hook
+ *   cannot drift apart, because the hook adds nothing but a trigger.
+ *
+ * WHY TWO PHASES INSTEAD OF ONE
+ *   This repair must run LATE, because anything that rebuilds a mesh after us
+ *   discards the nanimation binding, and the failure is silent - the avatar
+ *   still uploads, the toggle just stops hiding anything.
+ *
+ *   The post-process phase looks like the right place: it runs after every
+ *   pre-process callback.  But it CANNOT be the only place, for two reasons:
+ *
+ *     1. IVRCSDKPostprocessAvatarCallback.OnPostprocessAvatar() takes NO
+ *        ARGUMENT - the SDK never says which avatar was built, so on its own it
+ *        has nothing to repair.  (Verified on VRCSDKBase-Editor: the invokers
+ *        are "Void OnPostprocessAvatar()" against
+ *        "Boolean OnPreprocessAvatar(GameObject)".)
+ *     2. The SDK wraps the post-process invocation in try/catch(Exception) and
+ *        swallows whatever escapes.  A repair that throws there produces NO
+ *        error in the console and no effect on the avatar - the worst possible
+ *        failure mode, because it looks like the hook never ran.
+ *
+ *   So the REPAIR HAPPENS IN PRE-PROCESS, behind every default-order package,
+ *   where the avatar is definitely alive and its meshes are definitely writable
+ *   - that is the phase the working toolkit already proved out.  The post
+ *   process phase is kept only to CATCH UP if the pre-process pass was skipped
+ *   or a later package rebuilt a mesh: it re-reads the stored reference and
+ *   re-runs the repair, which is idempotent.
+ *
+ *   A stale reference is the risk of keeping the second phase, so the stored
+ *   object is null-checked before use (a destroyed build clone reports null
+ *   through UnityEngine.Object's overloaded ==) and cleared unconditionally
+ *   once consumed, so it can never leak into a later build.
+ *
+ * WHAT IT DOES NOT DO
+ *   No file is written.  The repair targets a scene-local mesh instance and no
+ *   AssetDatabase call is made, so:
+ *     - the user's scene and assets are untouched;
+ *     - a failed repair cannot corrupt a mesh asset;
+ *     - nothing needs undoing after the build.
+ *   The object passed to the pre-process callback is never the user's scene
+ *   object: VRChat supplies a CLONE it has already instantiated for the upload,
+ *   so edits affect only the uploaded copy.  That clone is destroyed by the
+ *   pipeline when the build ends.
+ *
+ * FAILURE POLICY
+ *   Nothing in this class may throw.  A throw in pre-process would abort the
+ *   upload (the return value is checked), and a throw in post-process would be
+ *   silently swallowed by the SDK, so both paths catch and log.  A weighting
+ *   defect is not a good reason to block someone from uploading: the avatar
+ *   stays valid, it may just toggle incorrectly.
+ *
+ * GUARDING
+ *   Wrapped in #if VRC_SDK_VRCSDK3, because both interfaces are unavailable
+ *   without the SDK.  Nan itself is SDK-free and stays usable when VRChat's
+ *   packages are absent.
+ * ========================================================================== */
+
+#if VRC_SDK_VRCSDK3 && UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core
+{
+  /** <summary>Upload-time trigger for the nanimation weight repair.
+   *
+   *  The repair runs in PRE-process (avatar alive, meshes writable), and the
+   *  post-process callback re-runs it as a safety net for anything that rebuilt
+   *  a mesh after us.  Both phases are required: see the header.</summary> */
+  public class NanBuildHook : VRC.SDKBase.Editor.BuildPipeline.IVRCSDKPreprocessAvatarCallback,
+                              VRC.SDKBase.Editor.BuildPipeline.IVRCSDKPostprocessAvatarCallback
+  {
+    /** <summary>Lowest order, so the reference is captured before any other
+     *  pre-process callback can rebuild the hierarchy out from under us.</summary> */
+    public System.Int32 callbackOrder => System.Int32.MinValue;
+
+    /** <summary>The clone VRChat is uploading, carried from pre to post.
+     *
+     *  Static because the post-process callback is handed nothing, so there is
+     *  no instance to read it from.  Null-checked and cleared on every use.</summary> */
+    static UnityEngine.GameObject _pending;
+
+    /** <summary>Capture the avatar and repair it.
+     *
+     *  The repair runs HERE rather than in post-process: this is the phase where
+     *  the object is known-alive and its meshes are known-writable, and it is
+     *  the phase the menu-driven path already proved works.  Post-process is a
+     *  safety net, not the primary trigger.</summary> */
+    public System.Boolean OnPreprocessAvatar(UnityEngine.GameObject avatarGameObject)
+    { _pending = avatarGameObject;
+      Repair(avatarGameObject);
+      return true; }
+
+    /** <summary>Safety net: re-run the repair in case a later package rebuilt a
+     *  mesh after the pre-process pass.  The repair is idempotent, so a second
+     *  run over already-correct weights is a no-op.</summary> */
+    public void OnPostprocessAvatar()
+    { var target = _pending;
+      _pending = null;                       /* clear FIRST: never re-enter on a stale clone */
+      Repair(target); }
+
+    /** <summary>Run the repair, swallowing and logging every failure.
+     *
+     *  One helper for both phases so the error handling cannot differ between
+     *  them.  Nothing may escape: a throw here would abort the upload from
+     *  pre-process and be silently discarded from post-process.</summary> */
+    static void Repair(UnityEngine.GameObject target)
+    { if (target == null) return;
+      try
+      { NZK.Core.Nan.PostProcess(target); }
+      catch (System.Exception e)
+      { UnityEngine.Debug.LogError("[NanBuildHook] nanimation repair failed: " + e); } }
+  }
+}
+}
+#endif

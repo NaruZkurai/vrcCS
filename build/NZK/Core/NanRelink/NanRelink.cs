@@ -511,6 +511,18 @@ public static class NanRelink
      *  to run this and the off-armature meshes are siblings of it, not
      *  children.</summary> */
     public static System.Int32 RelinkSelection(UnityEngine.GameObject[] objs)
+    { return RelinkSelection(objs,false); }
+    /** <summary>As RelinkSelection, with quiet control for the build hook.
+     *
+     *  Quiet exists because this now runs on EVERY UPLOAD, and the per-mesh
+     *  lines are useful interactively but would be noise in a build log.  The
+     *  summary line is always emitted, so a build still records what happened.
+     *
+     *  Nothing here writes a file.  Weights go to a scene-local mesh instance,
+     *  which is what makes this safe to run mid-build: the upload pipeline has
+     *  already finished reading the assets by the time this is called, and the
+     *  build then serialises whatever the renderer references.</summary> */
+    public static System.Int32 RelinkSelection(UnityEngine.GameObject[] objs,System.Boolean quiet)
     { if (NZK.B.mpty.t(objs)) return 0;
       var seen = new System.Collections.Generic.HashSet<UnityEngine.Mesh>();
       System.Int32 total = 0;
@@ -538,6 +550,7 @@ public static class NanRelink
           var st = new System.Int32[4];
           System.Int32 n = NormalizeInScene(smr,st);
           if (n > 0) total += n;
+          if (quiet) continue;
           /* One line per renderer, always - a total like "3" is only
              actionable next to the vertex count it came out of. */
           UnityEngine.Debug.Log("[NanRelink] '" + StripSuffix(smr.sharedMesh.name) + "' verts=" + st[0] +
@@ -547,13 +560,12 @@ public static class NanRelink
             " nanimBone=" + (st[1] < 0 ? "ABSENT" : ("found@" + st[1])) +
             " nanimOnVerts=" + CountNanimBound(smr) +
             " changed=" + n); } }
-      /* Report what the SOURCE search actually saw, so a run that finds no
-         source is diagnosable from the log alone. */
-      var gens = UnityEngine.Object.FindObjectsOfType<C_AviGenerator>();
-      UnityEngine.Debug.Log("[NanRelink] C_AviGenerator found: " + (gens != null ? gens.Length : 0) +
-        "; HB_Sources found: " + CountSources(gens) + ".");
-      /* Scene meshes are not assets - they are saved with the scene, so
-         SaveAssets would only force a pointless reimport of the project. */
+      if (!quiet)
+      { /* Report what the SOURCE search actually saw, so a run that finds no
+           source is diagnosable from the log alone. */
+        var gens = UnityEngine.Object.FindObjectsOfType<C_AviGenerator>();
+        UnityEngine.Debug.Log("[NanRelink] C_AviGenerator found: " + (gens != null ? gens.Length : 0) +
+          "; HB_Sources found: " + CountSources(gens) + "."); }
       UnityEngine.Debug.Log("[NanRelink] " + scanned + " off-armature mesh(es), " +
         duped + " duplicate mesh(es) skipped, " + sourced + " source mesh(es) skipped, " +
         skipped + " on-armature skipped, " + total + " vertex/vertices normalised.");
