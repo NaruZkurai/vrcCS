@@ -148,6 +148,7 @@ public static partial class Systems {
     if (cat1 == "VF" && cat2 == "BakeToggle") { int n = 0; foreach (var go in objs) { Systems.Baking.BakeToggleFromVrcfury(go); n++; } Systems.MenuSuccess("Bake Toggle (VF)","Processed " + n + " object(s)."); return; }
     if (cat1 == "VF" && cat2 == "BakeArmatureLink") { int n = 0; foreach (var go in objs) { Systems.Baking.BakeArmatureLink(go,true); n++; } Systems.MenuSuccess("Bake Armature Link","Processed " + n + " object(s)."); return; }
     if (cat1 == "VF" && cat2 == "BakeFullController") { int n = 0; foreach (var go in objs) { Systems.Baking.BakeFullController(go); n++; } Systems.MenuSuccess("Bake Full Controller","Processed " + n + " object(s)."); return; }
+    if (cat1 == "NaNimation" && cat2 == "Relink") { int n = NZK.Core.NanRelink.RelinkSelection(objs); Systems.MenuSuccess("Fix Off-Armature Weights","Normalized " + n + " vertex/vertices."); return; }
     if (cat1 == "VF" && cat2 == "BakeSps") { int n = 0; foreach (var go in objs) { SpsSocketBaker.Bake(go); n++; } Systems.MenuSuccess("Bake SPS (VF)","Baked " + n + " socket(s)."); return; }
     UnityEngine.Debug.LogWarning("[MenuDO] Unknown command: " + cat1 + "/" + cat2 + " (" + fn + ")"); }
   

@@ -72,9 +72,14 @@ public static partial class Meshes {
   { UnityEngine.GameObject hipsGO = new UnityEngine.GameObject("Hips");
     hipsGO.transform.SetParent(armature,false);
     hips = hipsGO.transform; }
-  UnityEngine.Transform naniBones = hips.Find("NaNim_bones");
+  /* "NaNimations", not "NaNim_bones".  The animation clips address the bones by
+     full path - "Armature/NaNimations/NaNimate X" - so the container has to
+     carry the same name the toggle generator used, or the clip resolves to a
+     non-existent path and animates nothing.  An audit of the built scene found
+     zero objects named "NaNim_bones". */
+  UnityEngine.Transform naniBones = hips.Find("NaNimations");
   if (naniBones == null)
-  { UnityEngine.GameObject naniBonesGO = new UnityEngine.GameObject("NaNim_bones");
+  { UnityEngine.GameObject naniBonesGO = new UnityEngine.GameObject("NaNimations");
     naniBonesGO.transform.SetParent(hips,false);
     naniBones = naniBonesGO.transform; }
   return naniBones; }

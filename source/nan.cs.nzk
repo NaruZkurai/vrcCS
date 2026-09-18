@@ -6,6 +6,15 @@
  * into NaN", "force any numeric scale to NaN". Three reusable layers, each
  * over raw text: DETECT (read-only) / SET zero-only / SET unconditional.
  *
+ * THE SINGLE AUTHORITY ON "IS THIS ZERO".  This class is the one place that
+ * decides, and the decision is made by PARSING each axis as a float and
+ * comparing to 0f - never by regex-matching a numeric literal.  Three separate
+ * copies of a regex version ("[-0-9.eE]*0") previously lived in
+ * NaNimate.Fix, rctonan.cs.nzk and the check below; that pattern also matches
+ * any number ENDING in 0, so a scale of 10 or -20 was rewritten to NaN and the
+ * mesh vanished.  All three now route here, so the bug cannot return in one
+ * copy while the others stay fixed.
+ *
  * NOT here (that is YAML's job, see Yaml.cs.nzk): document markers, block
  * spans, type tags, line/field parsing, YBlock, AND the YAML value literals
  * themselves (NaN, VecNaN, FlagsKey, FlagsScale, AttrScale, IsZero, IsNumber,
