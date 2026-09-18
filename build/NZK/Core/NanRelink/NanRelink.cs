@@ -4,6 +4,49 @@ namespace NZK
 public static partial class Core {
 public static class NanRelink
   {
+    /** <summary>Base name for the scene-local copy of a renderer's mesh.
+     *
+     *  The tool must never write into an imported mesh: these renderers point at
+     *  sub-assets of Assets/*.blend, so a write would change the source model and
+     *  every other avatar using it.  The fix is ONE scene-local copy that this
+     *  tool then owns outright - not a copy per run, and not a copy per vertex
+     *  pass, both of which were tried and both of which were wrong:
+     *    - copying per run left a fresh mesh behind every time and compounded
+     *      the name until it filled the log and took the editor down;
+     *    - writing in place treated an imported mesh as if it were scene data and
+     *      silently skipped 38 of 39 meshes.
+     *
+     *  The copy is recognised on later runs by this suffix, so the renderer is
+     *  rebound to it once and then reused forever.</summary> */
+    public const System.String SceneSuffix = "_NZKScene";
+    /** <summary>The scene-local mesh this renderer should be repaired through.
+     *
+     *  Returns the renderer's existing copy when it already has one, otherwise
+     *  makes a single copy of the imported mesh, names it, and rebounds the
+     *  renderer.  Callers then write into whatever this returns - never into the
+     *  original - so the source .blend stays byte-identical.
+     *
+     *  isReadable matters: a copy of a non-readable imported mesh cannot be
+     *  written either, so a mesh that fails that test is reported rather than
+     *  silently returning something the caller cannot use.</summary> */
+    public static UnityEngine.Mesh SceneMeshFor(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return null;
+      UnityEngine.Mesh cur = smr.sharedMesh;
+      /* Already ours: reuse, never copy again. */
+      if (NZK.S.HasOIC(cur.name,SceneSuffix)) return cur;
+      UnityEngine.Mesh copy = UnityEngine.Object.Instantiate(cur);
+      if (copy == null) return null;
+      copy.name = BaseMeshName(cur.name) + SceneSuffix;
+      smr.sharedMesh = copy;
+      return copy; }
+    /** <summary>Drop any scene suffix from a mesh name, so re-cloning a copy that
+     *  was itself already copied cannot stack "X_NZKScene_NZKScene".</summary> */
+    public static System.String BaseMeshName(System.String name)
+    { if (!NZK.S.Has(name)) return name;
+      System.String s = name;
+      while (NZK.S.HasOIC(s,SceneSuffix) && s.Length > SceneSuffix.Length)
+        s = s.Substring(0,s.Length - SceneSuffix.Length);
+      return s; }
     /** <summary>Unity keeps four influences per vertex before it renormalises.</summary> */
     public const System.Int32 MaxInfluences = 4;
     /** <summary>How many of the four influences may be REAL bones.
@@ -20,10 +63,11 @@ public static class NanRelink
     /* ── FIND ────────────────────────────────────────────────────────── */
     /** <summary>Suffix appended to a mesh this tool instantiates.
      *
-     *  It marks the clone as ours so a second run REUSES it instead of
-     *  instantiating again.  Without that check the tool appended the suffix
-     *  to an already-suffixed name every run, compounding to hundreds of
-     *  copies and taking the editor down with it.</summary> */
+    /** <summary>The suffix an OLDER version of this tool appended to its
+     *  per-run clones.  Kept only so the source lookup can still recognise and
+     *  strip it: scenes processed by that version carry meshes named
+     *  "X_NZKRelink", and failing to strip it would stop those meshes matching
+     *  their source.  Nothing creates this suffix any more.</summary> */
     public const System.String RelinkSuffix = "_NZKRelink";
     /** <summary>True when this renderer sits under the armature.
      *
@@ -116,14 +160,21 @@ public static class NanRelink
     public static System.Boolean IsRelinkName(System.String name)
     { if (!NZK.S.Has(name)) return false;
       return NZK.S.HasOIC(name,RelinkSuffix); }
-    /** <summary>Remove any number of trailing _NZKRelink suffixes.
-     *  Runs collapse to "..._NZKRelink_NZKRelink" when the tool re-instances an
-     *  already-instanced mesh, so the strip must loop, not run once.</summary> */
+    /** <summary>Remove any trailing scene or legacy clone suffix.
+     *
+     *  Both spellings must be stripped, and the strip must LOOP: a mesh that an
+     *  older version processed collapsed to "X_NZKRelink_NZKRelink", so a single
+     *  pass would leave one behind and stop the name matching its source.</summary> */
     public static System.String StripSuffix(System.String name)
     { if (!NZK.S.Has(name)) return name;
       System.String s = name;
-      while (s.Length > RelinkSuffix.Length && NZK.S.HasOIC(s,RelinkSuffix))
-        s = s.Substring(0,s.Length - RelinkSuffix.Length);
+      System.Boolean cut = true;
+      while (cut)
+      { cut = false;
+        if (s.Length > RelinkSuffix.Length && NZK.S.HasOIC(s,RelinkSuffix))
+        { s = s.Substring(0,s.Length - RelinkSuffix.Length); cut = true; }
+        else if (s.Length > SceneSuffix.Length && NZK.S.HasOIC(s,SceneSuffix))
+        { s = s.Substring(0,s.Length - SceneSuffix.Length); cut = true; } }
       return s; }
     /* ── ONE VERTEX ──────────────────────────────────────────────────── */
     /** <summary>Index of the nanimation slot already present on this vertex, or -1.</summary>
@@ -340,38 +391,6 @@ public static class NanRelink
                                           boneIndex1 = b[1],weight1 = v[1],
                                           boneIndex2 = b[2],weight2 = v[2],
                                           boneIndex3 = b[3],weight3 = v[3] }; }
-    /** <summary>Normalise every vertex of one renderer's mesh.
-     *
-     *  When the pre-process source mesh is available, each vertex's base
-     *  weights are taken FROM IT and remapped by bone name, then normalised.
-     *  Without a source the mesh's own weights are normalised in place, which
-     *  still caps and rebalances but cannot recover a group the post processor
-     *  dropped.
-     *
-     *  Returns the number of vertices whose weights were changed.</summary> */
-    public static System.Int32 NormalizeMesh(UnityEngine.SkinnedMeshRenderer smr)
-    { if (smr == null) return 0;
-      UnityEngine.Mesh mesh = smr.sharedMesh;
-      if (mesh == null) return 0;
-      UnityEngine.BoneWeight[] weights = mesh.boneWeights;
-      if (NZK.B.mpty.t(weights)) return 0;
-      UnityEngine.Transform[] bones = smr.bones;
-      UnityEngine.Mesh src = FindSourceMesh(smr);
-      UnityEngine.BoneWeight[] srcW = src != null ? src.boneWeights : null;
-      System.Collections.Generic.Dictionary<System.String,System.Int32> map = NameMap(bones);
-      UnityEngine.Transform[] srcBones = src != null ? SourceBones(smr,src) : null;
-      System.Int32 nanim = NanimBoneFor(bones,mesh.name);
-      System.Int32 changed = 0;
-      for (System.Int32 i = 0; i < weights.Length; i++)
-      { UnityEngine.BoneWeight baseW = weights[i];
-        /* When the source mesh carries this vertex, its groups are the truth -
-           the scene copy may have lost them in post processing. */
-        if (srcW != null && srcBones != null && i < srcW.Length && srcW.Length > 0)
-          baseW = FromSource(srcW[i % srcW.Length],srcBones,map);
-        UnityEngine.BoneWeight w = Normalize(baseW,bones,nanim);
-        if (!Same(w,weights[i])) { weights[i] = w; changed++; } }
-      if (changed > 0) mesh.boneWeights = weights;
-      return changed; }
     /** <summary>The bone array the SOURCE mesh's indices refer to.
      *
      *  The source object is the pre-process twin of the scene renderer, so in
@@ -387,30 +406,28 @@ public static class NanRelink
       foreach (UnityEngine.SkinnedMeshRenderer s in smrs)
       { if (s != null && s.sharedMesh == src) return s.bones; }
       return null; }
-    /** <summary>Normalise every vertex of one renderer's mesh, IN THE SCENE.
+    /** <summary>Post-process one renderer's mesh, through a scene-local copy.
      *
-     *  The edit must land on a mesh instance this renderer OWNS.  Writing
-     *  straight to sharedMesh rewrites the asset on disk, which the pipeline
-     *  then overwrites on the next build - the log would report changes while
-     *  the scene never moved.
+     *  THE COPY IS MADE ONCE AND THEN REUSED.  SceneMeshFor handles that: it
+     *  returns the renderer's existing copy if it already has one, and otherwise
+     *  clones the imported mesh a single time and rebinds the renderer.  From
+     *  then on this function writes into a mesh the scene owns, so the source
+     *  .blend is never touched.
      *
-     *  SkinnedMeshRenderer has NO .mesh property (that is MeshRenderer); the
-     *  only accessor is sharedMesh.  A scene-local copy therefore has to be
-     *  made explicitly with UnityEngine.Object.Instantiate, which is the same
-     *  call the toolkit uses when cloning an avatar.</summary> */
-    public static System.Int32 NormalizeInScene(UnityEngine.SkinnedMeshRenderer smr,System.Int32[] stats)
+     *  This is the third design tried, and the first two failed for opposite
+     *  reasons:
+     *    - a copy PER RUN left a fresh mesh behind each time and compounded the
+     *      name until it filled the log and crashed the editor;
+     *    - writing IN PLACE treated the imported sub-asset as scene data, so the
+     *      write went at the source model instead.
+     *  One copy, reused, is what satisfies both: the tool owns its working mesh,
+     *  and there is exactly one of it.</summary> */
+    public static System.Int32 NormalizeInPlace(UnityEngine.SkinnedMeshRenderer smr,System.Int32[] stats)
     { if (smr == null || smr.sharedMesh == null) return 0;
-      /* Reuse a clone this tool already made, if the renderer is pointing at
-         one.  Instantiating unconditionally is what compounded the suffix and
-         crashed the editor: every run added another full copy of every mesh. */
-      UnityEngine.Mesh inst = smr.sharedMesh;
-      if (!IsRelinkName(inst.name))
-      { inst = UnityEngine.Object.Instantiate(smr.sharedMesh);
-        if (inst == null) return 0;
-        inst.name = StripSuffix(smr.sharedMesh.name) + RelinkSuffix;
-        smr.sharedMesh = inst; }
-      UnityEngine.BoneWeight[] weights = inst.boneWeights;
-      System.Int32 vcount = inst.vertexCount;
+      UnityEngine.Mesh mesh = SceneMeshFor(smr);
+      if (mesh == null) return 0;
+      UnityEngine.BoneWeight[] weights = mesh.boneWeights;
+      System.Int32 vcount = mesh.vertexCount;
       if (stats != null && stats.Length >= 4) { stats[0] = vcount; stats[3] = -1; }
       if (NZK.B.mpty.t(weights)) return 0;
       if (stats != null && stats.Length >= 4) stats[3] = weights.Length;
@@ -419,7 +436,7 @@ public static class NanRelink
       UnityEngine.BoneWeight[] srcW = src != null ? src.boneWeights : null;
       System.Collections.Generic.Dictionary<System.String,System.Int32> map = NameMap(bones);
       UnityEngine.Transform[] srcBones = src != null ? SourceBones(smr,src) : null;
-      System.Int32 nanim = NanimBoneFor(bones,src != null ? src.name : smr.sharedMesh.name);
+      System.Int32 nanim = NanimBoneFor(bones,src != null ? src.name : BaseMeshName(mesh.name));
       System.Int32 changed = 0;
       for (System.Int32 i = 0; i < weights.Length; i++)
       { UnityEngine.BoneWeight baseW = weights[i];
@@ -429,13 +446,13 @@ public static class NanRelink
         if (!Same(w,weights[i])) { weights[i] = w; changed++; } }
       if (stats != null && stats.Length >= 4) { stats[1] = nanim; stats[2] = srcW != null ? srcW.Length : 0; }
       if (changed > 0)
-      { inst.boneWeights = weights;
+      { mesh.boneWeights = weights;
         UnityEditor.EditorUtility.SetDirty(smr);
-        UnityEditor.EditorUtility.SetDirty(inst); }
+        UnityEditor.EditorUtility.SetDirty(mesh); }
       return changed; }
     /** <summary>Normalise one renderer, no stats.</summary> */
-    public static System.Int32 NormalizeInScene(UnityEngine.SkinnedMeshRenderer smr)
-    { return NormalizeInScene(smr,null); }
+    public static System.Int32 NormalizeInPlace(UnityEngine.SkinnedMeshRenderer smr)
+    { return NormalizeInPlace(smr,null); }
     /** <summary>How many vertices actually carry a nanimation binding RIGHT NOW.
      *
      *  A bare bone index is not enough to tell "the binding is missing" from
@@ -518,10 +535,9 @@ public static class NanRelink
      *  lines are useful interactively but would be noise in a build log.  The
      *  summary line is always emitted, so a build still records what happened.
      *
-     *  Nothing here writes a file.  Weights go to a scene-local mesh instance,
-     *  which is what makes this safe to run mid-build: the upload pipeline has
-     *  already finished reading the assets by the time this is called, and the
-     *  build then serialises whatever the renderer references.</summary> */
+     *  Nothing here writes a file and nothing creates a mesh.  Weights are
+     *  written back to the renderer's own mesh, so a post-processed avatar is
+     *  the same set of objects it started with.</summary> */
     public static System.Int32 RelinkSelection(UnityEngine.GameObject[] objs,System.Boolean quiet)
     { if (NZK.B.mpty.t(objs)) return 0;
       var seen = new System.Collections.Generic.HashSet<UnityEngine.Mesh>();
@@ -541,19 +557,22 @@ public static class NanRelink
         { if (smr == null || smr.sharedMesh == null) continue;
           if (IsOnArmature(smr)) { skipped++; continue; }
           /* Never rewrite a source object under HB_Sources: it holds the
-             authoritative weights this tool READS FROM.  Instantiating a clone
-             over it both corrupts the source and is what compounded the
-             _NZKRelink suffix across runs. */
+             authoritative weights this tool READS FROM. */
           if (IsUnderSources(smr.transform)) { sourced++; continue; }
+          /* Dedupe on the mesh the renderer holds BEFORE any copy is made.
+             NormalizeInPlace rebinds the renderer to a scene copy, so deduping
+             afterwards would compare copy-against-original and let one shared
+             import through twice, giving each renderer its own copy and losing
+             the sharing the model had. */
           if (!seen.Add(smr.sharedMesh)) { duped++; continue; }
           scanned++;
           var st = new System.Int32[4];
-          System.Int32 n = NormalizeInScene(smr,st);
+          System.Int32 n = NormalizeInPlace(smr,st);
           if (n > 0) total += n;
           if (quiet) continue;
           /* One line per renderer, always - a total like "3" is only
              actionable next to the vertex count it came out of. */
-          UnityEngine.Debug.Log("[NanRelink] '" + StripSuffix(smr.sharedMesh.name) + "' verts=" + st[0] +
+          UnityEngine.Debug.Log("[NanRelink] '" + BaseMeshName(smr.sharedMesh.name) + "' verts=" + st[0] +
             " boneWeights=" + (st[3] < 0 ? "EMPTY" : st[3].ToString()) +
             " maxInfluences=" + MaxInfluencesIn(smr.sharedMesh) +
             " srcWeights=" + st[2] +
