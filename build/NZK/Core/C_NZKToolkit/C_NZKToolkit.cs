@@ -112,28 +112,33 @@ public class C_NZKToolkit : UnityEngine.MonoBehaviour
  public static void MergeToLastSelected()
  { var objs = UnityEditor.Selection.gameObjects;
    if (objs == null || objs.Length < 2) return;
-   var target = objs[objs.Length - 1];
+   /* The ACTIVE object is the target, not the last array element: the array's
+      order follows the selection-sorting setting, not click order, so reading
+      its tail merges into a different object on a different machine. */
+   var target = UnityEditor.Selection.activeGameObject;
+   if (target == null) target = objs[objs.Length - 1];
    if (target == null) return;
    System.Collections.Generic.List<UnityEngine.GameObject> sources = new System.Collections.Generic.List<UnityEngine.GameObject>();
-   for (int i = 0; i < objs.Length - 1; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
+   for (int i = 0; i < objs.Length; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
    if (sources.Count == 0) return;
-   Systems.MergeObjectsToTarget(sources.ToArray(), target); }
+   ObjectMerge.Merge(sources.ToArray(), target); }
  [UnityEditor.MenuItem("GameObject/NZK/Merge without Children to Last Selected Selected", true)]
  public static System.Boolean ValidateMergeToLastSelected()
- { return UnityEditor.Selection.activeGameObject != null; }
+ { return UnityEditor.Selection.activeGameObject != null && UnityEditor.Selection.gameObjects != null && UnityEditor.Selection.gameObjects.Length > 1; }
  [UnityEditor.MenuItem("GameObject/NZK/Merge Including Children to Last Selected", false, 31)]
  public static void DeepMergeToLastSelected()
  { var objs = UnityEditor.Selection.gameObjects;
    if (objs == null || objs.Length < 2) return;
-   var target = objs[objs.Length - 1];
+   var target = UnityEditor.Selection.activeGameObject;
+   if (target == null) target = objs[objs.Length - 1];
    if (target == null) return;
    System.Collections.Generic.List<UnityEngine.GameObject> sources = new System.Collections.Generic.List<UnityEngine.GameObject>();
-   for (int i = 0; i < objs.Length - 1; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
+   for (int i = 0; i < objs.Length; i++) { if (objs[i] != null && objs[i] != target) sources.Add(objs[i]); }
    if (sources.Count == 0) return;
    Systems.DeepMergeObjectsToTarget(sources.ToArray(), target); }
  [UnityEditor.MenuItem("GameObject/NZK/Merge Including Children to Last Selected", true)]
  public static System.Boolean ValidateDeepMergeToLastSelected()
- { return UnityEditor.Selection.activeGameObject != null; }
+ { return UnityEditor.Selection.activeGameObject != null && UnityEditor.Selection.gameObjects != null && UnityEditor.Selection.gameObjects.Length > 1; }
  [UnityEditor.MenuItem("GameObject/NZK/Bake All", false, 40)] static void BakeAllMenu() { Systems.MenuDO("Bake","All","",UnityEditor.Selection.gameObjects); }
  [UnityEditor.MenuItem("GameObject/NZK/Bake All", true)] static bool ValidateBakeAllMenu() { return UnityEditor.Selection.activeGameObject != null; }
  [UnityEditor.MenuItem("GameObject/NZK/Bake/Mesh", false, 41)] static void BakeMeshMenu() { Systems.MenuDO("Bake","Mesh","",UnityEditor.Selection.gameObjects); }
@@ -148,6 +153,8 @@ public class C_NZKToolkit : UnityEngine.MonoBehaviour
  [UnityEditor.MenuItem("GameObject/NZK/Bake/Expression Layers", true)] static bool ValidateBakeExprMenu() { return UnityEditor.Selection.activeGameObject != null; }
   [UnityEditor.MenuItem("GameObject/NZK/Merge Meshes",false,47)] public static void MergeMeshesMenu() { Systems.MenuDO("Mesh","Merge","",UnityEditor.Selection.gameObjects); }
   [UnityEditor.MenuItem("GameObject/NZK/Merge Meshes",true)] public static System.Boolean ValidateMergeMeshes() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Mesh/Fix 4 Bone Influences",false,52)] public static void FixInfluencesMenu() { Systems.MenuDO("Mesh","Influences","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Mesh/Fix 4 Bone Influences",true)] public static System.Boolean ValidateFixInfluences() { return UnityEditor.Selection.activeGameObject != null; }
   [UnityEditor.MenuItem("GameObject/NZK/Generate/Menu",false,34)] public static void GenerateMenu() { Systems.MenuDO("Generate","Menu","",UnityEditor.Selection.gameObjects); }
   [UnityEditor.MenuItem("GameObject/NZK/Generate/Menu",true)] public static System.Boolean ValidateGenerateMenu() { return UnityEditor.Selection.activeGameObject != null; }
   [UnityEditor.MenuItem("GameObject/NZK/Generate/DBT",false,35)] public static void GenerateDBT() { Systems.MenuDO("Generate","DBT","",UnityEditor.Selection.gameObjects); }
@@ -164,8 +171,10 @@ public class C_NZKToolkit : UnityEngine.MonoBehaviour
   [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Armature Link",true)] public static System.Boolean ValidateBakeArmatureLink() { return UnityEditor.Selection.activeGameObject != null; }
   [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Full Controller",false,46)] public static void BakeFullControllerMenu() { Systems.MenuDO("VF","BakeFullController","",UnityEditor.Selection.gameObjects); }
   [UnityEditor.MenuItem("GameObject/NZK/VF/Bake Full Controller",true)] public static System.Boolean ValidateBakeFullController() { return UnityEditor.Selection.activeGameObject != null; }
-  [UnityEditor.MenuItem("GameObject/NZK/NaNimation/Fix Off-Armature Weights",false,51)] public static void RelinkNanimationBonesMenu() { Systems.MenuDO("NaNimation","Relink","",UnityEditor.Selection.gameObjects); }
-  [UnityEditor.MenuItem("GameObject/NZK/NaNimation/Fix Off-Armature Weights",true)] public static System.Boolean ValidateRelinkNanimationBones() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/NaNimation/Fix Bone SMR NaN Relations",false,51)] public static void RelinkNanimationBonesMenu() { Systems.MenuDO("NaNimation","Relink","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/NaNimation/Fix Bone SMR NaN Relations",true)] public static System.Boolean ValidateRelinkNanimationBones() { return UnityEditor.Selection.activeGameObject != null; }
+  [UnityEditor.MenuItem("GameObject/NZK/Mesh/Audit (why is it invisible)",false,53)] public static void AuditMeshesMenu() { Systems.MenuDO("Mesh","Audit","",UnityEditor.Selection.gameObjects); }
+  [UnityEditor.MenuItem("GameObject/NZK/Mesh/Audit (why is it invisible)",true)] public static System.Boolean ValidateAuditMeshes() { return UnityEditor.Selection.activeGameObject != null; }
   [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake All VF")] public static void ContextBakeAllVf(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null) Systems.Baking.BakeAllVf(comp.gameObject); }
   [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake Full Controller")] public static void ContextBakeFullController(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null && HasFeature(comp,"FullController")) Systems.Baking.BakeFullController(comp.gameObject); }
   [UnityEditor.MenuItem("CONTEXT/VRCFury/Bake Armature Link")] public static void ContextBakeArmatureLink(UnityEditor.MenuCommand cmd) { var comp = cmd.context as UnityEngine.MonoBehaviour; if (comp != null && HasFeature(comp,"ArmatureLink")) Systems.Baking.BakeArmatureLink(comp.gameObject); }

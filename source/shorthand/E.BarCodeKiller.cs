@@ -6,7 +6,22 @@ namespace NZK
  /* Called when no u is passed */
 public static string BarCodeKiller<T>(System.Int64 value, T u)
 {
- if (value.GetType() != typeof(int)){return "IDE ERR BCC NOT INT";}
+ /* The parameter is Int64 and every call site passes one - E.C.d/w/e all take
+    System.Int64 - so the guard must ACCEPT Int64.  It used to require
+    value.GetType() == typeof(int) against that Int64 parameter, which no call
+    could ever satisfy: a long is boxed as System.Int64 and never as
+    System.Int32, so EVERY E.C and E.D call logged
+    "IDE ERR BCC NOT INT" instead of resolving its rr-code.  The diagnostic
+    that reports the failure was itself the failure.
+
+    The check is still worth keeping, just pointed at the right question:
+    reject an out-of-range INDEX rather than a type.  Resolution builds the
+    name "rr" + value and looks it up by reflection, so a negative index
+    produces the nonsense name "rr-1" and an absurd one produces a
+    twenty-digit lookup that can only fail.  Both are caller mistakes worth
+    naming, and both are cheap to catch here. */
+ if (value < 0) { return "IDE ERR BCC NEGATIVE: " + value; }
+ if (value > MaxCode) { return "IDE ERR BCC OUT OF RANGE: " + value; }
 
  string name = "rr" + value;
  var flags = System.Reflection.BindingFlags.Public |
@@ -22,6 +37,14 @@ public static string BarCodeKiller<T>(System.Int64 value, T u)
 
  return "unknown:" + value;
 }
+
+ /** <summary>Highest rr-code number this table defines.
+  *
+  *  A sanity bound, not a contract: it exists so a fat-fingered literal in a
+  *  call site is reported as out-of-range rather than as the much less
+  *  specific "unknown:N", which reads like a missing definition instead of a
+  *  typo.  Raise it when E.rr.cs grows past it.</summary> */
+ public const System.Int64 MaxCode = 200;
 
  /* compound: resolve a pair of codes as title + message, mirroring NerrOK.
     negative value in the second slot means "no second code" (single dialogue).

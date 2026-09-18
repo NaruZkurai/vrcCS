@@ -127,14 +127,25 @@ public static class Nan
      *
      *  Returns the number of vertices changed.  Never throws: a build hook that
      *  throws blocks the upload, and a failed repair is better reported than
-     *  fatal.</summary> */
+     *  fatal.
+     *
+     *  EDITOR-ONLY, AND WHY THAT IS NOT A LIMITATION.  Both halves of this
+     *  method reach editor-only code: the weight repair is NanRelink, which is
+     *  itself inside `#if UNITY_EDITOR`, and the clip fixup reads
+     *  UnityEditor.AssetDatabase.  The caller (NanBuildHook) is inside the same
+     *  guard, so the guard here restates that contract for the COMPILER rather
+     *  than for the reader: without it a player build compiles this method,
+     *  finds neither symbol, and fails the player gate with
+     *  "Core does not contain a definition for NanRelink".  The avatar-upload
+     *  path only ever exists in the editor, so nothing is lost by the guard.</summary> */
+#if UNITY_EDITOR
     public static System.Int32 PostProcess(UnityEngine.GameObject avatarRoot)
     { if (avatarRoot == null) return 0;
       System.Int32 changed = 0;
       try
       { changed = NZK.Core.NanRelink.RelinkSelection(new UnityEngine.GameObject[] { avatarRoot },true); }
       catch (System.Exception e)
-      { UnityEngine.Debug.LogError("[Nan.PostProcess] weight repair failed: " + e); }
+      { NZK.E.C.e(58,e.Message); }
       /* Clip fixup.  Runs over the generated clips only - FixAnimationClipScale
          needs a real asset path to patch the text, so a clip that is not an
          asset is skipped there rather than failing here. */
@@ -147,11 +158,12 @@ public static class Nan
           if (System.String.IsNullOrEmpty(p)) continue;
           if (!NZK.S.HasOIC(p,"NaN")) continue;   /* only the generated nanimation clips */
           if (NZK.Core.NaNimate.Fix.FixAnimationClipScale(c)) n++; }
-        if (n > 0) UnityEngine.Debug.Log("[Nan.PostProcess] rewrote zero->NaN scale in " + n + " clip(s)."); }
+        if (n > 0) NZK.E.C.d(60,n); }
       catch (System.Exception e)
-      { UnityEngine.Debug.LogError("[Nan.PostProcess] clip fixup failed: " + e); }
-      UnityEngine.Debug.Log("[Nan.PostProcess] repaired " + changed + " vertex/vertices for '" + avatarRoot.name + "'.");
+      { NZK.E.C.e(59,e.Message); }
+      NZK.E.C.d(61,changed);
       return changed; }
+#endif
   }
 }
 }

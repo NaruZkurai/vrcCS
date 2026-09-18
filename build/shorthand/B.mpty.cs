@@ -37,10 +37,24 @@ namespace NZK{  public static partial class B{
     /* List has no usable elements. */
     public static bool t<T>(System.Collections.Generic.List<T> a){return a==null||a.Count==0;}
 
+    /* Set has no usable elements.
+       A HashSet is not a List, so the two overloads above do not cover it and a
+       call with one fails to infer T:
+         error CS0411: The type arguments for method 'B.mpty.t<T>(T[])' cannot be
+         inferred from the usage.
+       Added rather than worked around at the call site because the question
+       "does this collection have anything in it?" is the SAME question
+       regardless of which collection type is asking it - and a caller that has
+       to remember which types are supported will eventually guess wrong. */
+    public static bool t<T>(System.Collections.Generic.HashSet<T> a){return a==null||a.Count==0;}
+
     /* Array has usable elements. */
     public static bool nt<T>(T[] a){return !t(a);}
 
     /* List has usable elements. */
     public static bool nt<T>(System.Collections.Generic.List<T> a){return !t(a);}
+
+    /* Set has usable elements. */
+    public static bool nt<T>(System.Collections.Generic.HashSet<T> a){return !t(a);}
   }
 }}

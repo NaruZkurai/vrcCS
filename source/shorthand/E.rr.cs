@@ -65,6 +65,78 @@ public static string rr48<T>(T u){ return $"Operation not permitted: {Nm(u)}";}
 public static string rr49<T>(T u){ return $"Backup is missing: {Nm(u)}";}
 public static string rr50<T>(T u){ return $"Unknown error: {Nm(u)}";}
 public static string rr51= "51";
+   /* mesh-merge family - same generic-object shape as rr20..rr50, so a merge
+      failure reads as title "<state>" + message "<offending object>". */
+public static string rr52<T>(T u){ return $"Has no mesh: {Nm(u)}";}
+public static string rr53<T>(T u){ return $"Has no submeshes: {Nm(u)}";}
+public static string rr54<T>(T u){ return $"Has no bones to bind: {Nm(u)}";}
+public static string rr55<T>(T u){ return $"Failed to merge: {Nm(u)}";}
+public static string rr56<T>(T u){ return $"Has no avatar root to merge into: {Nm(u)}";}
+public static string rr57<T>(T u){ return $"Was merged, sources parked: {Nm(u)}";}
+   /* post-process family - one code per stage, so the console line names WHICH
+      stage died instead of a generic "failed". */
+public static string rr58<T>(T u){ return $"Weight repair failed: {Nm(u)}";}
+public static string rr59<T>(T u){ return $"Clip fixup failed: {Nm(u)}";}
+public static string rr60<T>(T u){ return $"Rewrote zero->NaN scale in {Nm(u)} clip(s)";}
+public static string rr61<T>(T u){ return $"Repaired {Nm(u)} vertex/vertices";}
+   /* object-merge family.  One code per OUTCOME, because the reported bug was
+      that a component move looked fine while the reference rewrite silently
+      dropped every reference - the two halves need separate codes to be told
+      apart in the log. */
+public static string rr62<T>(T u){ return $"Nothing to merge: {Nm(u)}";}
+public static string rr63<T>(T u){ return $"Target is not a valid merge destination: {Nm(u)}";}
+public static string rr64<T>(T u){ return $"Could not be moved onto the target: {Nm(u)}";}
+public static string rr65<T>(T u){ return $"Merged {Nm(u)}";}
+public static string rr66<T>(T u){ return $"Unpacked prefab instance: {Nm(u)}";}
+   /* mesh-import family - the model's skin-weight cap.  255 influences is what
+      an FBX imports as "Unlimited", and the SDK reserialises a mesh carrying
+      them into something the client cannot skin: the avatar uploads invisible.
+      4 is BoneWeight's own slot count, so nothing usable is lost by capping. */
+public static string rr67<T>(T u){ return $"Importer has no skin-weight setting: {Nm(u)}";}
+public static string rr68<T>(T u){ return $"Mesh import influences set to 4: {Nm(u)}";}
+   /* upload-hook family - the pre/post-process switch, so a bisect run is
+      visible in the log and an upload cannot be silently un-repaired. */
+public static string rr69<T>(T u){ return $"Upload hook DISABLED for '{Nm(u)}' phase - avatar uploaded unmodified";}
+public static string rr70<T>(T u){ return $"Upload hook pre={Nm(u)}";}
+   /* relink family - a weight mapping that could not resolve names, which is
+      the failure that used to collapse every unmatched influence onto bone 0
+      (drag the mesh to the root) instead of reporting a skeleton mismatch. */
+public static string rr71<T>(T u){ return $"No shared bone names between source and scene: {Nm(u)}";}
+public static string rr72<T>(T u){ return $"Unmapped influences: {Nm(u)}";}
+public static string rr73<T>(T u){ return $"Upload hook RUNNING at {Nm(u)}";}
+   /* mesh-audit family - READ-ONLY diagnostics.  Each names a condition that
+      makes a mesh invisible while the hierarchy still looks perfect, so the
+      reader gets a fact instead of a theory. */
+public static string rr74<T>(T u){ return $"Audit root: {Nm(u)}";}
+public static string rr75<T>(T u){ return $"No SkinnedMeshRenderer under: {Nm(u)}";}
+public static string rr76<T>(T u){ return $"Renderer or GameObject DISABLED: {Nm(u)}";}
+public static string rr77<T>(T u){ return $"sharedMesh is NULL: {Nm(u)}";}
+public static string rr78<T>(T u){ return $"EMPTY mesh: {Nm(u)}";}
+public static string rr79<T>(T u){ return $"BOUNDS are NaN/Infinite: {Nm(u)}";}
+public static string rr80<T>(T u){ return $"BOUNDS are zero size: {Nm(u)}";}
+public static string rr81<T>(T u){ return $"Null material slot or shader: {Nm(u)}";}
+public static string rr82<T>(T u){ return $"Mesh not readable, weights unchecked: {Nm(u)}";}
+public static string rr83<T>(T u){ return $"NaN vertex data: {Nm(u)}";}
+public static string rr84<T>(T u){ return $"Vertices with no weight: {Nm(u)}";}
+public static string rr85<T>(T u){ return $"Vertices with more than 4 influences: {Nm(u)}";}
+public static string rr86<T>(T u){ return $"Mesh: {Nm(u)}";}
+public static string rr87<T>(T u){ return $"NaN SCALE on transform: {Nm(u)}";}
+public static string rr88<T>(T u){ return $"ZERO SCALE on transform: {Nm(u)}";}
+public static string rr89<T>(T u){ return $"Transforms: {Nm(u)}";}
+public static string rr90<T>(T u){ return $"Audit summary: {Nm(u)}";}
+   /* bone-array family - the audit used to count bones.Length and stop, which
+      cannot see an array of N NULLS (length N, no skeleton).  That is the
+      "invisible but all the bones are there" shape exactly. */
+public static string rr91<T>(T u){ return $"Bones array holds NULL entries: {Nm(u)}";}
+public static string rr92<T>(T u){ return $"ALL bone slots are NULL: {Nm(u)}";}
+public static string rr93<T>(T u){ return $"Bones belong to a different root: {Nm(u)}";}
+public static string rr94<T>(T u){ return $"bindPoses length != bones length: {Nm(u)}";}
+   /* dead-bone-slot family - the cause of an invisible avatar with a perfect
+      mesh.  A bone array longer than the bones it holds reports a healthy
+      bones.Length; an index written into a NULL slot resolves to nothing on the
+      client (the editor still draws it) and collapses the vertex to the origin. */
+public static string rr95<T>(T u){ return $"Bone array holds NULL slots: {Nm(u)}";}
+public static string rr96<T>(T u){ return $"No live nanimation bone for this mesh: {Nm(u)}";}
    /* name helper for parameterized codes above */
 public static string Nm<T>(T u){ return u == null ? typeof(T).Name : u.ToString();}
     /*--------- Success (2xx) ----------*/
