@@ -284,24 +284,31 @@ public static partial class Core
      *  34 therefore hid nothing, which is exactly the reported symptom.
      *
      *  Each mesh toggles independently, so each needs its OWN bone.  The bone
-     *  for a mesh is the one whose name matches the mesh (or the mesh's source
-     *  object); the toggle generator names them that way on purpose.
+     *  for a mesh is the one whose name corresponds to the mesh.
+     *
+     *  NO FALLBACK TO ANOTHER MESH'S BONE.  An earlier version fell back to the
+     *  first nanimation bone when nothing matched.  That silently bound a mesh
+     *  to a neighbour's bone, so toggling that neighbour ALSO hid this mesh -
+     *  two meshes answering one toggle, with no error to show for it.  A mesh
+     *  with no bone of its own now returns -1, and the caller keeps its real
+     *  weights instead (see Normalize): correct deformation, no toggle.  That is
+     *  the honest failure - the alternative corrupts a different mesh's toggle.
      *
      *  Matching order, most specific first:
-     *    1. exact name equality with the mesh name
-     *    2. equality ignoring the _NZKRelink suffix this tool adds
-     *    3. bone contains the mesh name, or the mesh name contains the bone stem
-     *  Falls back to FirstNanimBone only when nothing matches, so a mesh whose
-     *  bone is oddly named is still bound rather than left dead.</summary> */
+     *    1. exact bone name equality with the mesh name
+     *    2. equality after stripping the "NaNimate " style prefix
+     *    3. the mesh name ENDS WITH the bone stem ("TJacket - Leather Jacket"
+     *       ends with "Leather Jacket"), which is how the generator links a
+     *       mesh whose name carries a category prefix
+     *    4. either name contains the other, for suffixed groups like
+     *       "NaNimate GRC" against "NaNimate GRC chains"
+     *  Returns -1 when none match, rather than borrowing a bone.</summary> */
     public static System.Int32 NanimBoneFor(UnityEngine.Transform[] bones,System.String meshName)
     { if (NZK.B.mpty.t(bones)) return -1;
-      if (!NZK.S.Has(meshName))
-      { /* No name to match on: any nanimation bone is better than none. */
-        return FirstNanimBone(bones); }
-      System.String want = StripSuffix(meshName);
+      if (!NZK.S.Has(meshName)) return -1;
+      System.String want = BaseMeshName(meshName);
 
-      /* The bone is named "NaNimate " + the source object name, so comparing
-         against the PREFIX-STRIPPED bone name is what actually lines them up. */
+      /* 1 + 2: exact name, or exact stem. */
       for (System.Int32 i = 0; i < bones.Length; i++)
       { if (bones[i] == null) continue;
         System.String bn = bones[i].name;
@@ -309,17 +316,29 @@ public static partial class Core
         if (NZK.S.EqOIC(bn,want)) return i;
         if (NZK.S.EqOIC(StripNanimPrefix(bn),want)) return i; }
 
-      /* Looser: either name contains the other.  Handles the generator suffixing
-         a group ("NaNimate GRC" vs "NaNimate GRC chains"). */
+      /* 3: the mesh name ends with the bone stem.  This is the case that
+         matters for a mesh named with a category prefix - "TJacket - Leather
+         Jacket" must find "NaNimate Leather Jacket", and requiring the match to
+         be at the END stops it matching an unrelated shorter stem that merely
+         appears somewhere in the middle. */
       for (System.Int32 i = 0; i < bones.Length; i++)
       { if (bones[i] == null) continue;
         System.String bn = bones[i].name;
         if (!IsNanimBone(bn)) continue;
         System.String stem = StripNanimPrefix(bn);
-        if (!NZK.S.Has(stem)) continue;
-        if (NZK.S.HasOIC(want,stem) || NZK.S.HasOIC(stem,want)) return i; }
+        if (NZK.S.Has(stem) && NZK.S.EndsWithOIC(want,stem)) return i; }
 
-      return FirstNanimBone(bones); }
+      /* 4: either name contains the other, for suffixed groups. */
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] == null) continue;
+        System.String bn = bones[i].name;
+        if (!IsNanimBone(bn)) continue;
+        System.String stem = StripNanimPrefix(bn);
+        if (NZK.S.Has(stem) && (NZK.S.HasOIC(want,stem) || NZK.S.HasOIC(stem,want))) return i; }
+
+      /* Nothing corresponds to this mesh.  Report that rather than borrowing a
+         neighbouring mesh's bone - see the header. */
+      return -1; }
 
     /** <summary>Drop the nanimation prefix from a bone name, leaving the stem.
      *
@@ -379,15 +398,52 @@ public static partial class Core
      *  the binding is lost.  The handle is therefore written once and the three
      *  real weights are scaled into the room it leaves, preserving their ratios.
      *
-     *  nanimBone is the bind-bone index to use; pass -1 when the renderer has no
-     *  nanimation bone, in which case the vertex is returned untouched rather
-     *  than silently mangled.</summary> */
+     *  WHAT HAPPENS WHEN THE MESH HAS NO BONE OF ITS OWN.  Nothing is invented
+     *  and no neighbour's bone is borrowed.  The vertex keeps its real weights
+     *  in full - all four, with no nanimation handle - which is simply the
+     *  normal 4-weight skinning result.  The mesh deforms correctly and has no
+     *  toggle, instead of deforming correctly while another mesh's toggle
+     *  secretly controls it.
+     *
+     *  nanimBone is the bind-bone index to use; pass -1 when no bone corresponds
+     *  to this mesh, in which case the vertex keeps all four real influences.</summary> */
     public static UnityEngine.BoneWeight Normalize(UnityEngine.BoneWeight w,UnityEngine.Transform[] bones,System.Int32 nanimBone)
     { System.Single near = NZK.Core.Meshes.Vars.Consts.DefaultNearZeroVertexWeight;
 
-      /* No nanimation bone on this renderer.  Return as-is: fabricating a
-         binding would point the vertex at a bone that does not exist. */
-      if (nanimBone < 0) return w;
+      /* No matching nanimation bone: keep the vertex's own four real weights.
+         This is the "4 weights without nan" case - no handle is inserted, so
+         nothing is displaced and the deformation is exactly what the rig had. */
+      if (nanimBone < 0)
+      { /* Drop any stale nanimation slot first, so a mesh that previously
+           borrowed a neighbour's bone does not keep that stray binding. */
+        System.Single[] rv = new System.Single[4];
+        System.Int32[] rb = new System.Int32[4];
+        System.Int32 rn = 0;
+        for (System.Int32 i = 0; i < 4; i++)
+        { System.Single wv = WeightAt(w,i);
+          System.Int32 bi = BoneIndexAt(w,i);
+          if (wv <= 0f) continue;
+          if (bi < 0 || bones == null || bi >= bones.Length) continue;
+          if (bones[bi] == null) continue;
+          if (IsNanimBone(bones[bi].name)) continue;    /* stray handle: drop */
+          rv[rn] = wv; rb[rn] = bi; rn++; }
+
+        if (rn == 0) return w;                          /* nothing to rebuild */
+
+        System.Single rsum = 0f;
+        for (System.Int32 i = 0; i < rn; i++) rsum += rv[i];
+        if (rsum <= 0f) return w;
+        System.Single rscale = 1f / rsum;               /* renormalise to 1 */
+
+        var outR = new UnityEngine.BoneWeight();
+        for (System.Int32 i = 0; i < rn; i++)
+        { System.Single sw = rv[i] * rscale;
+          if (sw <= 0f) continue;
+          if (i == 0) { outR.boneIndex0 = rb[i]; outR.weight0 = sw; }
+          else if (i == 1) { outR.boneIndex1 = rb[i]; outR.weight1 = sw; }
+          else if (i == 2) { outR.boneIndex2 = rb[i]; outR.weight2 = sw; }
+          else { outR.boneIndex3 = rb[i]; outR.weight3 = sw; } }
+        return outR; }
 
       /* Collect the real influences, discarding any stale nanimation slot (there
          is at most one) so it cannot occupy one of the three real slots. */
