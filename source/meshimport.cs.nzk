@@ -344,6 +344,21 @@ public static partial class Core
         if (c == MaxInfluences) count++; }
       return count; }
 
+    /** <summary>One serialised float setting off an importer, or a marker when
+     *  this Unity version does not expose it.
+     *
+     *  Settings are read through SerializedObject rather than the typed
+     *  ModelImporter members for the same reason they are WRITTEN that way:
+     *  this build's ModelImporter has no public `weightThreshold` member at all
+     *  (measured - referencing it is a compile error), and the property name
+     *  that IS present is the serialised one.  Reading and writing then go
+     *  through exactly one mechanism, so the log always describes the value the
+     *  fix actually writes.</summary> */
+    static System.String FloatSetting(UnityEditor.SerializedObject so,System.String name)
+    { if (so == null) return "?";
+      UnityEditor.SerializedProperty p = so.FindProperty(name);
+      return p == null ? "(absent)" : p.floatValue.ToString(); }
+
     /** <summary>Log the import settings and the influence fingerprint for every
      *  model referenced by the given objects.
      *
@@ -356,8 +371,12 @@ public static partial class Core
       if (NZK.B.mpty.t(paths)) return;
       foreach (System.String path in paths)
       { if (!NZK.S.Has(path)) continue;
-        UnityEditor.ModelImporter mi = UnityEditor.AssetImporter.GetAtPath(path) as UnityEditor.ModelImporter;
+        UnityEditor.AssetImporter importer = UnityEditor.AssetImporter.GetAtPath(path);
+        UnityEditor.ModelImporter mi = importer as UnityEditor.ModelImporter;
         if (mi == null) { NZK.E.C.w(99,path); continue; }
+        UnityEditor.SerializedObject so;
+        try { so = new UnityEditor.SerializedObject(importer); }
+        catch (System.Exception) { NZK.E.C.w(99,path); continue; }
         System.Int32 four = 0;
         UnityEngine.Object[] subs = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(path);
         if (!NZK.B.mpty.t(subs))
@@ -366,9 +385,9 @@ public static partial class Core
             if (m == null) continue;
             four += CountFourInfluenceVertices(m); } }
         NZK.E.C.d(100,"model=" + System.IO.Path.GetFileName(path) +
-                      " maxBonesPerVertex=" + mi.maxBonesPerVertex +
+                      " maxBonesPerVertex=" + FloatSetting(so,MaxBonesProperty) +
                       " optimizeBones=" + mi.optimizeBones +
-                      " weightThreshold=" + mi.weightThreshold +
+                      " weightThreshold=" + FloatSetting(so,WeightThresholdProperty) +
                       " fourInfluenceVerts=" + four); }
     }
   }
