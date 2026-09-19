@@ -2,7 +2,7 @@
 namespace NZK
 {
 public static partial class Core {
-  /** <summary>Top menu entry points under GameObject/NZK.</summary> */
+  /** <summary>Right-click entry points on components and VRCFury features.</summary> */
   
 }
 }

@@ -247,6 +247,10 @@ public sealed class NZKNaNimateWeightImporter : UnityEditor.AssetPostprocessor
             UnityEditor.ModelImporter importer = UnityEditor.AssetImporter.GetAtPath(path) as UnityEditor.ModelImporter;
             if (importer == null)
                 continue;
+            /* Same order rule as OnPreprocessModel: the mode must be Custom
+             * before the cap, or the cap is ignored on the reimport this call
+             * exists to trigger. */
+            importer.skinWeights = UnityEditor.ModelImporterSkinWeights.Custom;
             importer.minBoneWeight = 0f;
             importer.maxBonesPerVertex = MaxInfluences;
             importer.SaveAndReimport();
