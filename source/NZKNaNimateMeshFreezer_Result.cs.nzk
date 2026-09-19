@@ -1,0 +1,32 @@
+#if UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core
+{
+public static partial class NZKNaNimateMeshFreezer {
+public sealed class Result
+    {
+        public bool success;
+        public string error;
+        public string folder;
+        public string prefabPath;
+        public int meshCount;
+        public int rendererCount;
+        public long approxBytes;
+        /* Bones that could not be mapped into the cloned hierarchy. */
+        public int unmappedBones;
+        public string unmappedBoneSample;
+        /*
+         * Source renderers with no counterpart in the clone. Non-zero means
+         * the clone hierarchy does not mirror the source, so those meshes
+         * were never written. Surfaced instead of failing silently.
+         */
+        public int unmappedRenderers;
+        public string unmappedRendererSample;
+        public bool HasWarning => unmappedBones > 0 || unmappedRenderers > 0;
+    }
+}
+}
+}
+}
+#endif

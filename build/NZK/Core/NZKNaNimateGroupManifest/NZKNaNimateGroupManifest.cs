@@ -1,0 +1,300 @@
+#if UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core {
+[System.Serializable]
+ public sealed partial class NZKNaNimateGroupManifest {
+        public const int CurrentFormatVersion = 2;
+        public const string Suffix = ".meta.nzk";
+        public int formatVersion = CurrentFormatVersion;
+        public string sourceGuid = string.Empty;
+        public string generated = string.Empty;
+        public System.Collections.Generic.List<Entry> groups = new System.Collections.Generic.List<Entry>();
+        /* Per-submesh enable flag. A group can be on for one mesh, off for another. */
+        
+        
+        /* Absolute sidecar path for a given model asset path. */
+        public static string SidecarPathFor(string modelAssetPath)
+        {
+            return NZK.S.P.r2a(modelAssetPath) + Suffix;
+        }
+        public static bool Exists(string modelAssetPath)
+        {
+            return System.IO.File.Exists(SidecarPathFor(modelAssetPath));
+        }
+        /* Load, or return an empty manifest when none exists yet. */
+        public static NZKNaNimateGroupManifest Load(string modelAssetPath)
+        {
+            string path = SidecarPathFor(modelAssetPath);
+            if (!System.IO.File.Exists(path))
+                return new NZKNaNimateGroupManifest();
+            try
+            {
+                string json = System.IO.File.ReadAllText(path);
+                /* v1 wrote "meshes" as a plain string array, which cannot be
+                 * deserialized into MeshSelection. Convert the text before
+                 * parsing rather than trying to make one shape serve both. */
+                if (IsLegacyV1(json))
+                    json = ConvertV1ToV2(json);
+                NZKNaNimateGroupManifest manifest =
+                    UnityEngine.JsonUtility.FromJson<NZKNaNimateGroupManifest>(json);
+                if (manifest == null)
+                    return new NZKNaNimateGroupManifest();
+                if (manifest.groups == null)
+                    manifest.groups = new System.Collections.Generic.List<Entry>();
+                manifest.formatVersion = CurrentFormatVersion;
+                return manifest;
+            }
+            catch (System.Exception e)
+            {
+                UnityEngine.Debug.LogError(NZK.S.NZKNaNimatePrefix("Failed to read manifest " + path + ": " + e.Message));
+                return new NZKNaNimateGroupManifest();
+            }
+        }
+        static bool IsLegacyV1(string json)
+        {
+            /* v1 is identified by an explicit version below 2, or by the absence
+             * of a version field combined with a flat string mesh array. */
+            int versionIndex = json.IndexOf("\"formatVersion\"", System.StringComparison.Ordinal);
+            if (versionIndex >= 0)
+            {
+                int colon = json.IndexOf(':', versionIndex);
+                if (colon >= 0)
+                {
+                    int i = colon + 1;
+                    while (i < json.Length && char.IsWhiteSpace(json[i]))
+                        i++;
+                    int start = i;
+                    while (i < json.Length && char.IsDigit(json[i]))
+                        i++;
+                    if (i > start && int.TryParse(json.Substring(start, i - start), out int version))
+                        return version < CurrentFormatVersion;
+                }
+            }
+            /* No usable version: treat a quoted mesh-array element as v1. */
+            return json.Contains("\"meshes\": [\n    \"" ) ||
+                   json.Contains("\"meshes\": [\"");
+        }
+        /* Rewrite v1 "meshes": ["A","B"] into v2 "meshes": [{"name":"A","enabled":bool}].
+         * Scans structurally rather than by regex so quoted commas inside mesh
+         * names cannot corrupt the result.
+         */
+        static string ConvertV1ToV2(string json)
+        {
+            const string marker = "\"meshes\"";
+            var sb = new System.Text.StringBuilder(json.Length + 256);
+            int cursor = 0;
+            while (true)
+            {
+                int idx = json.IndexOf(marker, cursor, System.StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    sb.Append(json, cursor, json.Length - cursor);
+                    break;
+                }
+                int open = json.IndexOf('[', idx);
+                if (open < 0)
+                {
+                    sb.Append(json, cursor, json.Length - cursor);
+                    break;
+                }
+                int close = FindMatchingBracket(json, open);
+                if (close < 0)
+                {
+                    sb.Append(json, cursor, json.Length - cursor);
+                    break;
+                }
+                string body = json.Substring(open + 1, close - open - 1);
+                /* Already v2 (objects) - leave untouched. */
+                if (body.IndexOf('{') >= 0)
+                {
+                    sb.Append(json, cursor, close + 1 - cursor);
+                    cursor = close + 1;
+                    continue;
+                }
+                sb.Append(json, cursor, open + 1 - cursor);
+                System.Collections.Generic.List<string> names = ParseStringArray(body);
+                for (int i = 0; i < names.Count; i++)
+                {
+                    if (i > 0)
+                        sb.Append(',');
+                    sb.Append("{\"name\":\"")
+                      .Append(EscapeJson(names[i]))
+                      .Append("\",\"enabled\":true}");
+                }
+                cursor = close;
+            }
+            return sb.ToString();
+        }
+        static int FindMatchingBracket(string text, int openIndex)
+        {
+            int depth = 0;
+            bool inString = false;
+            bool escaped = false;
+            for (int i = openIndex; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+                if (c == '"') { inString = true; continue; }
+                if (c == '[') depth++;
+                else if (c == ']')
+                {
+                    depth--;
+                    if (depth == 0)
+                        return i;
+                }
+            }
+            return -1;
+        }
+        static System.Collections.Generic.List<string> ParseStringArray(string body)
+        {
+            var names = new System.Collections.Generic.List<string>();
+            int cursor = 0;
+            while (cursor < body.Length)
+            {
+                int quote = body.IndexOf('"', cursor);
+                if (quote < 0)
+                    break;
+                var sb = new System.Text.StringBuilder();
+                int i = quote + 1;
+                for (; i < body.Length; i++)
+                {
+                    char c = body[i];
+                    if (c == '\\' && i + 1 < body.Length)
+                    {
+                        sb.Append(body[i + 1]);
+                        i++;
+                        continue;
+                    }
+                    if (c == '"') break;
+                    sb.Append(c);
+                }
+                names.Add(sb.ToString());
+                cursor = i + 1;
+            }
+            return names;
+        }
+        static string EscapeJson(string value)
+        {
+            var sb = new System.Text.StringBuilder(value.Length + 8);
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\t') sb.Append("\\t");
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+        /* Write the manifest. Returns the written absolute path. */
+        public string Save(string modelAssetPath)
+        {
+            formatVersion = CurrentFormatVersion;
+            generated = System.DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            if (NZK.B.NoE(sourceGuid))
+            {
+                sourceGuid = UnityEditor.AssetDatabase.AssetPathToGUID(modelAssetPath);
+            }
+            groups = SortByName(groups);
+            string path = SidecarPathFor(modelAssetPath);
+            System.IO.File.WriteAllText(path, UnityEngine.JsonUtility.ToJson(this, true));
+            /* Keep Unity aware of the new file so it appears in the project view. */
+            UnityEditor.AssetDatabase.ImportAsset(
+                ToProjectRelative(path), UnityEditor.ImportAssetOptions.ForceUpdate);
+            return path;
+        }
+        /* Filter out unnamed entries and order by name. Replaces a LINQ chain so
+         * the file needs no using directives.
+         */
+        static System.Collections.Generic.List<Entry> SortByName(
+            System.Collections.Generic.List<Entry> source)
+        {
+            System.Collections.Generic.List<Entry> cleaned =
+                new System.Collections.Generic.List<Entry>(source.Count);
+            for (int i = 0; i < source.Count; i++)
+            {
+                Entry entry = source[i];
+                if (entry != null && !NZK.B.N.ll.ws(entry.name))
+                    cleaned.Add(entry);
+            }
+            cleaned.Sort((a, b) => string.Compare(
+                a.name, b.name, System.StringComparison.OrdinalIgnoreCase));
+            return cleaned;
+        }
+        /* Project-relative form of an absolute path under this project.
+         *
+         * The inverse of NZK.S.P.r2a. Deliberately kept here rather than
+         * beside it: the only caller is Save, which needs the
+         * AssetDatabase-facing spelling of a path it just wrote to disk.
+         * NZK.S.P.r2a is the direction everything else needs.
+         */
+        static string ToProjectRelative(string absolutePath)
+        {
+            string projectRoot = System.IO.Directory.GetParent(UnityEngine.Application.dataPath).FullName;
+            if (absolutePath.StartsWith(projectRoot, System.StringComparison.Ordinal))
+            {
+                string relative = absolutePath.Substring(projectRoot.Length)
+                    .TrimStart(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                return relative.Replace(System.IO.Path.DirectorySeparatorChar, '/');
+            }
+            return absolutePath;
+        }
+        public bool IsEnabled(string groupName)
+        {
+            Entry entry = Find(groupName);
+            return entry != null && entry.enabled;
+        }
+        public Entry Find(string groupName)
+        {
+            for (int i = 0; i < groups.Count; i++)
+            {
+                if (NZK.S.EqOIC(groups[i].name, groupName))
+                    return groups[i];
+            }
+            return null;
+        }
+        public void SetEnabled(string groupName, bool enabled, System.Collections.Generic.IEnumerable<string> meshes)
+        {
+            Entry entry = Find(groupName);
+            if (entry == null)
+            {
+                entry = new Entry(groupName, enabled, meshes);
+                groups.Add(entry);
+                return;
+            }
+            entry.enabled = enabled;
+            if (meshes == null)
+                return;
+            foreach (string mesh in meshes)
+                entry.SetMeshEnabled(mesh, enabled);
+        }
+        /* Per-submesh flag, falling back to the group flag. */
+        public bool IsMeshEnabled(string groupName, string meshName)
+        {
+            Entry entry = Find(groupName);
+            return entry != null && entry.IsMeshEnabled(meshName);
+        }
+        public void SetMeshEnabled(string groupName, string meshName, bool enabled)
+        {
+            Entry entry = Find(groupName);
+            if (entry == null)
+            {
+                entry = new Entry(groupName, enabled, null);
+                groups.Add(entry);
+            }
+            entry.SetMeshEnabled(meshName, enabled);
+        }
+    
+}
+}
+}
+#endif
