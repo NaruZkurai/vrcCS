@@ -69,12 +69,54 @@ public static partial class Core
      *  actually present.</summary> */
     public const System.String MaxBonesProperty = "maxBonesPerVertex";
 
+    /** <summary>Every serialised name the influence cap is known to travel
+     *  under, newest first.
+     *
+     *  MEASURED ON THIS PROJECT'S UNITY, and the two names are NOT aliases.
+     *  Dumped straight off the importer for Nemasis.blend (Unity 2022.3.22f1):
+     *
+     *      skinWeightsMode    [Integer] = 1     <- the Inspector's dropdown
+     *      maxBonesPerVertex  [Integer] = 255   <- the cap; 255 == Unlimited
+     *      minBoneWeight      [Float]   = 0
+     *      optimizeBones      [Boolean] = False
+     *
+     *  Both exist AT THE SAME TIME and both are enforced.  Writing only one is
+     *  the bug this list used to cause: the old code walked this list, matched
+     *  `maxBonesPerVertex` first, set it to 4 and reported Changed=1 - while
+     *  `skinWeightsMode` stayed at its own value and the importer kept obeying
+     *  Unlimited.  The Inspector looked right and the upload was still wrong.
+     *
+     *  ORDER MATTERS AND IS NOT ALPHABETICAL.  `skinWeightsMode` is the mode
+     *  switch and goes FIRST, because Unity re-derives the cap when the mode
+     *  changes: writing the cap first lets the mode change overwrite it.  The
+     *  mode value for the four-bone case is the enum's 4, which coincides with
+     *  the plain count, so one constant serves both.</summary> */
+    public static readonly System.String[] MaxBonesNames = { "skinWeightsMode", "maxBonesPerVertex" };
+
     /** <summary>The strip switch: drop bones no vertex references.</summary> */
     public const System.String OptimizeBonesProperty = "optimizeBones";
 
     /** <summary>ModelImporter property holding the weight cutoff below which an
      *  influence is discarded at import.</summary> */
     public const System.String WeightThresholdProperty = "weightThreshold";
+
+    /** <summary>The first property that exists on this importer, or null.
+     *
+     *  Returns the SerializedProperty alongside the NAME it was found under,
+     *  because the two names mean different things even though they accept the
+     *  same int - the caller logs which one applied, and a log that says
+     *  "maxBonesPerVertex" when the importer actually speaks
+     *  `skinWeightsMode` would hide the very mismatch this exists to catch.
+     *  `isEnum` distinguishes them so an out-of-range write can be reported
+     *  rather than silently clamped by Unity.</summary> */
+    public static UnityEditor.SerializedProperty FindFirst(
+      UnityEditor.SerializedObject so,System.String[] names,out System.String found)
+    { found = null;
+      if (so == null || NZK.B.mpty.t(names)) return null;
+      for (System.Int32 i = 0; i < names.Length; i++)
+      { UnityEditor.SerializedProperty p = so.FindProperty(names[i]);
+        if (p != null) { found = names[i]; return p; } }
+      return null; }
 
     /** <summary>The cutoff to write, deliberately far below the 0.01 default.
      *
@@ -190,18 +232,24 @@ public static partial class Core
         try { so = new UnityEditor.SerializedObject(importer); }
         catch (System.Exception) { report.Skipped++; continue; }
 
-        UnityEditor.SerializedProperty cap = so.FindProperty(MaxBonesProperty);
+        /* The cap is written through EVERY name that exists, not one chosen up
+           front - see MaxBonesNames.  `strip` and `threshold` are separate
+           settings and are probed normally; a version that lacks one of them
+           still gets the others applied rather than being skipped wholesale. */
         UnityEditor.SerializedProperty strip = so.FindProperty(OptimizeBonesProperty);
         UnityEditor.SerializedProperty threshold = so.FindProperty(WeightThresholdProperty);
-        if (cap == null && strip == null && threshold == null)
-        { /* None of the three settings exists on this importer - the model
-             format may not support skin weights at all (.obj), or this Unity
-             version names them differently.  Reported WITH the property names
-             actually present, because "unsupported" alone leaves the reader
-             unable to tell those two cases apart and therefore unable to fix
-             either one. */
+        System.Boolean anyCap = false;
+        for (System.Int32 ni = 0; ni < MaxBonesNames.Length; ni++)
+          if (so.FindProperty(MaxBonesNames[ni]) != null) { anyCap = true; break; }
+        if (!anyCap && strip == null && threshold == null)
+        { /* None of the settings exists on this importer - the model format may
+             not support skin weights at all (.obj), or this Unity version names
+             them differently again.  Reported WITH the property names actually
+             present, because "unsupported" alone leaves the reader unable to
+             tell those two cases apart and therefore unable to fix either one. */
           report.Unsupported++;
-          NZK.E.C.w(67,path + " - tried " + MaxBonesProperty + ", " + OptimizeBonesProperty +
+          NZK.E.C.w(67,path + " - tried " + System.String.Join(", ",MaxBonesNames) +
+                        ", " + OptimizeBonesProperty +
                         " and " + WeightThresholdProperty +
                         "; has: " + PropertyNames(so));
           continue; }
@@ -230,9 +278,29 @@ public static partial class Core
            where the deletion happens. */
         System.Boolean changed = false;
 
-        if (cap != null && cap.intValue != MaxInfluences)
-        { cap.intValue = MaxInfluences;
-          changed = true; }
+        /* EVERY name in MaxBonesNames that this importer exposes gets written,
+           not just the first one found.  They are separate serialised fields
+           (skinWeightsMode AND maxBonesPerVertex, both present on 2022.3) and
+           both are enforced, so capping only the first left the second at 255
+           (Unlimited) and the importer kept obeying it while the code reported
+           success.  Writing each one that exists is what makes the outcome the
+           same on every Unity version instead of only on the one it was
+           measured on. */
+        System.Int32 capsWritten = 0;
+        for (System.Int32 ni = 0; ni < MaxBonesNames.Length; ni++)
+        { UnityEditor.SerializedProperty p = so.FindProperty(MaxBonesNames[ni]);
+          if (p == null) continue;
+          so.ApplyModifiedPropertiesWithoutUndo();
+          if (p.intValue == MaxInfluences) { capsWritten++; continue; }
+          p.intValue = MaxInfluences;
+          changed = true;
+          capsWritten++; }
+
+        if (capsWritten == 0 && strip == null && threshold == null)
+        { report.Unsupported++;
+          NZK.E.C.w(65,path + " - none of " + System.String.Join(", ",MaxBonesNames) +
+                        " exists on this importer; has: " + PropertyNames(so));
+          continue; }
 
         if (strip != null && !strip.boolValue)
         { strip.boolValue = true;
@@ -245,6 +313,22 @@ public static partial class Core
         if (!changed) { report.Already++; continue; }
 
         so.ApplyModifiedPropertiesWithoutUndo();
+
+        /* READ BACK, and fail loudly.  A write Unity accepted but discarded
+           (wrong property for the version, or a mode that re-derives the cap)
+           is indistinguishable from success unless the value is read again -
+           and that silence is exactly how the importer sat at 255 through a
+           "Changed=1" report. */
+        for (System.Int32 ni = 0; ni < MaxBonesNames.Length; ni++)
+        { UnityEditor.SerializedProperty p = so.FindProperty(MaxBonesNames[ni]);
+          if (p == null) continue;
+          if (p.intValue != MaxInfluences)
+          { report.Unsupported++;
+            NZK.E.C.w(65,path + " - " + MaxBonesNames[ni] + " would not accept " +
+                          MaxInfluences + " (still " + p.intValue +
+                          "); this importer does not honour the cap");
+            continue; } }
+
         UnityEditor.EditorUtility.SetDirty(importer);
         reimport.Add(path);
         report.Changed++; }
@@ -359,6 +443,19 @@ public static partial class Core
       UnityEditor.SerializedProperty p = so.FindProperty(name);
       return p == null ? "(absent)" : p.floatValue.ToString(); }
 
+    /** <summary>One serialised INT setting off an importer, or a marker when
+     *  this Unity version does not expose it.
+     *
+     *  Exists beside FloatSetting because the two influence-cap properties are
+     *  BOTH ints and both live at once on 2022.3 - the diagnostic has to show
+     *  them side by side, since a correct-looking `skinWeightsMode=4` next to a
+     *  stale `maxBonesPerVertex=255` is the exact state that made a broken
+     *  import look fixed.</summary> */
+    static System.String IntSetting(UnityEditor.SerializedObject so,System.String name)
+    { if (so == null) return "?";
+      UnityEditor.SerializedProperty p = so.FindProperty(name);
+      return p == null ? "(absent)" : p.intValue.ToString(); }
+
     /** <summary>Log the import settings and the influence fingerprint for every
      *  model referenced by the given objects.
      *
@@ -384,8 +481,20 @@ public static partial class Core
           { UnityEngine.Mesh m = o as UnityEngine.Mesh;
             if (m == null) continue;
             four += CountFourInfluenceVertices(m); } }
+        /* The cap is reported under the NAME it was found by, and its raw value
+           is included.  A bare "maxBonesPerVertex=4" on a 2022.3 importer would
+           be a lie - the property does not exist there and the number would
+           come back "(absent)"; printing the found name makes
+           `skinWeightsMode=255` (Unlimited, uncapped) legible as the failure it
+           is instead of looking like a count. */
+        System.String capFound = null;
+        UnityEditor.SerializedProperty capProp = FindFirst(so,MaxBonesNames,out capFound);
         NZK.E.C.d(100,"model=" + System.IO.Path.GetFileName(path) +
-                      " maxBonesPerVertex=" + FloatSetting(so,MaxBonesProperty) +
+                      " cap=" + (capFound == null ? "(absent, tried " +
+                                                System.String.Join("/",MaxBonesNames) + ")"
+                                                : capFound + "=" + capProp.intValue) +
+                      " skinWeightsMode=" + IntSetting(so,"skinWeightsMode") +
+                      " maxBonesPerVertex=" + IntSetting(so,"maxBonesPerVertex") +
                       " optimizeBones=" + mi.optimizeBones +
                       " weightThreshold=" + FloatSetting(so,WeightThresholdProperty) +
                       " fourInfluenceVerts=" + four); }
