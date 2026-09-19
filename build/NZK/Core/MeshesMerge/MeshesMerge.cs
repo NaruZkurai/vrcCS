@@ -133,29 +133,60 @@ public static partial class MeshesMerge {
      *  This is the whole of the per-iteration work, which is the point of the
      *  rewrite: one source in, one mesh out, no other source consulted.  A
      *  source with no submeshes is reported rather than producing an empty mesh,
-     *  because an empty mesh renders as nothing and reads as a silent failure.</summary> */
+     *  because an empty mesh renders as nothing and reads as a silent failure.
+     *
+     *  The SOURCE mesh is preferred over the live scene mesh: the scene mesh has
+     *  had its sub-0.01 vertex groups stripped by the importer/optimizer, so it
+     *  is not the authority for which groups a vertex belongs to.</summary> */
     public static UnityEngine.Mesh MergeOne(UnityEngine.GameObject src,UnityEngine.Mesh mesh)
     {
       if (src == null || mesh == null) return null;
-      int subCount = mesh.subMeshCount;
+      /* Prefer the imported .blend sub-asset: the scene mesh has already lost
+         its near-zero vertex groups, so it cannot tell us which groups a vertex
+         belongs to.  Fall back to the scene mesh when nothing resolves.
+         This resolution happens FIRST because the resolved mesh is the mesh the
+         CombineInstances below are built against, so it - not the live mesh - is
+         the authority for the submesh count.  Reading the count off the LIVE
+         mesh lets a source asset with FEWER submeshes than the scene mesh drive
+         the loop past the source's last submesh, and CombineMeshes then throws
+         ArgumentException: the merge is caught, reported as code 55, and the
+         source is silently counted as skipped. */
+      UnityEngine.Mesh sourceMesh = (src != null)
+        ? (NZK.Core.NanRelink.FindSourceMesh(src.GetComponent<UnityEngine.SkinnedMeshRenderer>()) ?? mesh)
+        : mesh;
+      if (sourceMesh != mesh) { NZK.E.C.d(96,src.name); }
+      else { NZK.E.C.w(97,src.name); }
+      /* The submesh count AND the loop bound both come from the RESOLVED mesh,
+         so the failure path below describes the mesh actually being combined. */
+      int subCount = sourceMesh.subMeshCount;
       if (subCount <= 0)
       { System.String msg = NZK.E.rr53(src.name);
         NZK.E.C.e(53,msg);
         return null; }
+      /* The merged renderer's slots are sized from the SOURCE submesh count, so
+         a live mesh carrying extra material slots (a renderer slot with no
+         submesh behind it) would leave the material array longer than the mesh
+         it is assigned to.  Reported rather than silently misindexed. */
+      if (mesh.subMeshCount != sourceMesh.subMeshCount) { NZK.E.C.w(98,src.name); }
       /* The source is MERGED IN PLACE (identity transform) - it is not being
          re-parented into the merged object, so baking its world matrix here
          would offset every merged mesh by the source's own position. */
       UnityEngine.CombineInstance[] cis = new UnityEngine.CombineInstance[subCount];
       for (System.Int32 s = 0; s < subCount; s++)
       { cis[s] = new UnityEngine.CombineInstance
-        { mesh = mesh,subMeshIndex = s,transform = UnityEngine.Matrix4x4.identity }; }
+        { mesh = sourceMesh,subMeshIndex = s,transform = UnityEngine.Matrix4x4.identity }; }
       UnityEngine.Mesh outMesh = new UnityEngine.Mesh { name = MergedMeshName(src) };
-      if (mesh.vertexCount > 65535) outMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-      try { outMesh.CombineMeshes(cis,true,true); }
+      if (sourceMesh.vertexCount > 65535) outMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+      /* SUBMESHES ARE KEPT SEPARATE (mergeSubMeshes:false) so one output submesh
+         exists per source submesh.  ResolveRendererMaterials returns one material
+         per source submesh in submesh order, so that array keeps indexing the
+         same submeshes after the combine; merging them would fuse two submeshes
+         that merely shared a material. */
+      try { outMesh.CombineMeshes(cis,false,true); }
       catch (System.ArgumentException ex)
       { NZK.E.C.e(55,src.name + " - " + ex.Message);
         return null; }
-      CopyUvChannels(mesh,outMesh,mesh.vertexCount);
+      CopyUvChannels(sourceMesh,outMesh,sourceMesh.vertexCount);
       CopyBones(src,outMesh);
       return outMesh;
     }
@@ -167,14 +198,29 @@ public static partial class MeshesMerge {
      *  than by a null.  Repeating the last material is what Unity itself does
      *  when a submesh has no entry: a null there renders the submesh with the
      *  default purple material, which looks like corruption rather than a
-     *  missing assignment.</summary> */
+     *  missing assignment.
+     *
+     *  `mesh` is the mesh the returned array is assigned to, so its submesh
+     *  count is the RENDERER's slot count.  The caller passes the LIVE renderer
+     *  mesh deliberately: the live slots are what the user configured, and the
+     *  merged mesh inherits their submesh count whenever the resolved source and
+     *  the live mesh agree.  The array is TRIMMED when the renderer has more
+     *  material slots than submeshes, so the result always satisfies the promise
+     *  above (Length == submesh count) instead of handing the renderer an array
+     *  with slots no submesh indexes.</summary> */
     public static UnityEngine.Material[] ResolveRendererMaterials(UnityEngine.GameObject src,UnityEngine.Mesh mesh)
     {
       UnityEngine.Material[] srcMats = MergeCore.GetMats(src);
       int subCount = mesh != null ? mesh.subMeshCount : 0;
       if (subCount <= 0) return srcMats ?? new UnityEngine.Material[0];
       if (NZK.B.mpty.t(srcMats)) return new UnityEngine.Material[subCount];
-      if (srcMats.Length >= subCount) return srcMats;
+      if (srcMats.Length == subCount) return srcMats;
+      if (srcMats.Length > subCount)
+      { /* Extra slots: keep the FIRST subCount entries, which are the ones the
+           submeshes address, and drop the rest. */
+        UnityEngine.Material[] trimmed = new UnityEngine.Material[subCount];
+        System.Array.Copy(srcMats,trimmed,subCount);
+        return trimmed; }
       UnityEngine.Material[] padded = new UnityEngine.Material[subCount];
       System.Array.Copy(srcMats,padded,srcMats.Length);
       UnityEngine.Material last = srcMats[srcMats.Length - 1];
@@ -197,14 +243,21 @@ public static partial class MeshesMerge {
       if (src.uv4 != null && src.uv4.Length == vertexCount) dst.uv4 = src.uv4;
     }
     /* ── BONES ───────────────────────────────────────────────────────── */
-    /** <summary>Rewrite boneWeights and bindposes for a merged mesh.
+    /** <summary>Carry the source mesh's boneWeights onto the merged mesh.
      *
-     *  The source and the merged mesh have the SAME vertex count (one source,
-     *  identity transform), so the weights transfer verbatim and only the SLOT
-     *  INDICES need translating from the source renderer's bone array into the
-     *  merged renderer's.  A vertex with no weights is given a single influence
-     *  on bone 0: leaving an empty weight is what makes Unity unlink the vertex
-     *  and drop the mesh to the origin on import.</summary> */
+     *  The weights are copied from the source mesh VERBATIM because the merged
+     *  mesh has the SAME vertex count (one source, identity transform), so its
+     *  vertex ordering is the source's.  A vertex with no weights is given a
+     *  single influence on bone 0: leaving an empty weight is what makes Unity
+     *  unlink the vertex and drop the mesh to the origin on import.
+     *
+     *  BIND POSES: DELIBERATELY NOT REBUILT.  The imported bindpose array was
+     *  already carried over by CombineMeshes from the same mesh the vertices
+     *  came from and is correct by construction.  Deriving it from each bone's
+     *  LIVE world transform makes the rest pose depend on where the bones are
+     *  standing at merge time, so the client skins the mesh against a foreign
+     *  rest pose and the avatar collapses to a point or flies apart with nothing
+     *  in the log.</summary> */
     public static void CopyBones(UnityEngine.GameObject src,UnityEngine.Mesh mesh)
     {
       if (src == null || mesh == null) return;
@@ -219,29 +272,20 @@ public static partial class MeshesMerge {
       else
       { System.Array.Copy(srcWeights,weights,count); }
       mesh.boneWeights = weights;
-      UnityEngine.Transform[] bones = smr.bones;
-      UnityEngine.Matrix4x4[] bindposes = new UnityEngine.Matrix4x4[bones.Length];
-      UnityEngine.Transform reference = bones[0];
-      for (System.Int32 i = 0; i < bones.Length; i++)
-      { if (bones[i] != null)
-        { bindposes[i] = bones[i].worldToLocalMatrix * reference.localToWorldMatrix; } }
-      mesh.bindposes = bindposes;
     }
     /** <summary>The bones the merged renderer binds to.
      *
-     *  Filtered: a renderer's bone array legitimately contains nulls (Unity
-     *  leaves a hole where a bone was deleted) and a merged renderer that binds
-     *  a null bone fails to skin without saying so.  Returning the source's
-     *  array unchanged would carry those holes into the merged object.</summary> */
+     *  Returned VERBATIM and UNFILTERED, holes included: the mesh's own
+     *  boneIndex0..3 address THIS array positionally, so handing the renderer a
+     *  shorter array with the nulls squeezed out shifts every index past the
+     *  first hole onto the wrong bone (or out of range, which the client
+     *  resolves to null and collapses the vertex onto the origin).</summary> */
     public static UnityEngine.Transform[] SourceBones(UnityEngine.GameObject src)
     {
       if (src == null) return new UnityEngine.Transform[0];
       UnityEngine.SkinnedMeshRenderer smr = src.GetComponent<UnityEngine.SkinnedMeshRenderer>();
       if (smr == null || NZK.B.mpty.t(smr.bones)) return new UnityEngine.Transform[0];
-      System.Collections.Generic.List<UnityEngine.Transform> keep =
-        new System.Collections.Generic.List<UnityEngine.Transform>();
-      foreach (UnityEngine.Transform b in smr.bones) if (b != null) keep.Add(b);
-      return keep.ToArray();
+      return smr.bones;
     }
     /** <summary>The transform the merged renderer's root bone is set from.
      *

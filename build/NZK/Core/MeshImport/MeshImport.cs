@@ -20,6 +20,27 @@ public static partial class MeshImport {
     public const System.String MaxBonesProperty = "maxBonesPerVertex";
     /** <summary>The strip switch: drop bones no vertex references.</summary> */
     public const System.String OptimizeBonesProperty = "optimizeBones";
+    /** <summary>ModelImporter property holding the weight cutoff below which an
+     *  influence is discarded at import.</summary> */
+    public const System.String WeightThresholdProperty = "weightThreshold";
+    /** <summary>The cutoff to write, deliberately far below the 0.01 default.
+     *
+     *  Unity's default weightThreshold is 0.01 (1%), so any skin weight under
+     *  one percent is treated as noise and DELETED while the importer reduces
+     *  a vertex to its four influences.  Nanimation vertex groups are authored
+     *  at 0.0000001 (1e-7) - five orders of magnitude under that default - so
+     *  the default silently drops the nanimation group from the imported mesh.
+     *  Nothing downstream can invent it back: NanRelink loads the ALREADY
+     *  IMPORTED sub-asset, finds no group, and every nanimation toggle ends up
+     *  dead with no error in the log.
+     *
+     *  The value written is ZeroThreshold, the closest the property gets to
+     *  "keep everything".  It is below BOTH the 0.01 default and the authored
+     *  1e-7 group by intent: the point is not to sit under one specific weight
+     *  but to disable the discard step entirely, so any future authored weight
+     *  survives too.  A constant is used rather than a literal so the intent is
+     *  greppable and the guard below reads as a named comparison.</summary> */
+    public const System.Single ZeroThreshold = 0f;
     /** <summary>Influences per vertex.  Four is BoneWeight's own slot count and
      *  what VRChat's skinning path expects.</summary> */
     public const System.Int32 MaxInfluences = 4;
@@ -45,25 +66,30 @@ public static partial class MeshImport {
      *  silent zero would read as success.</summary> */
     
     /* ── ENTRY POINTS ────────────────────────────────────────────────── */
-    /** <summary>Force 4 influences on every model under the given objects.
+    /** <summary>Every model path reachable from the given objects.
      *
      *  Paths are resolved from the renderers the objects actually use rather
      *  than by searching the project: an avatar only depends on the models it
      *  references, and touching an unrelated model would reimport an asset no
-     *  part of this upload reads.</summary> */
-    public static ImportReport ForceFour(UnityEngine.GameObject[] objs)
-    { ImportReport report = new ImportReport();
-      System.Collections.Generic.HashSet<System.String> paths =
+     *  part of this upload reads.  Shared by ForceFour and ReportImpacts so the
+     *  two never drift apart about what "the models of this avatar" means - a
+     *  diagnostic that measured a different set than the fix would be worse
+     *  than no diagnostic.</summary> */
+    static System.Collections.Generic.HashSet<System.String> PathsOf(UnityEngine.GameObject[] objs)
+    { System.Collections.Generic.HashSet<System.String> paths =
         new System.Collections.Generic.HashSet<System.String>(System.StringComparer.Ordinal);
-      if (!NZK.B.mpty.t(objs))
-      { foreach (UnityEngine.GameObject go in objs)
-        { if (go == null) continue;
-          UnityEngine.Transform scope = go.transform.root != null ? go.transform.root : go.transform;
-          foreach (UnityEngine.SkinnedMeshRenderer smr in scope.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true))
-          { if (smr == null || smr.sharedMesh == null) continue;
-            System.String p = UnityEditor.AssetDatabase.GetAssetPath(smr.sharedMesh);
-            if (NZK.S.Has(p)) paths.Add(p); } } }
-      return ForceFour(paths); }
+      if (NZK.B.mpty.t(objs)) return paths;
+      foreach (UnityEngine.GameObject go in objs)
+      { if (go == null) continue;
+        UnityEngine.Transform scope = go.transform.root != null ? go.transform.root : go.transform;
+        foreach (UnityEngine.SkinnedMeshRenderer smr in scope.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true))
+        { if (smr == null || smr.sharedMesh == null) continue;
+          System.String p = UnityEditor.AssetDatabase.GetAssetPath(smr.sharedMesh);
+          if (NZK.S.Has(p)) paths.Add(p); } }
+      return paths; }
+    /** <summary>Force 4 influences on every model under the given objects.</summary> */
+    public static ImportReport ForceFour(UnityEngine.GameObject[] objs)
+    { return ForceFour(PathsOf(objs)); }
     /** <summary>Force 4 influences on every model in the current selection.</summary> */
     public static ImportReport ForceFourSelection()
     { return ForceFour(UnityEditor.Selection.gameObjects); }
@@ -87,30 +113,48 @@ public static partial class MeshImport {
         catch (System.Exception) { report.Skipped++; continue; }
         UnityEditor.SerializedProperty cap = so.FindProperty(MaxBonesProperty);
         UnityEditor.SerializedProperty strip = so.FindProperty(OptimizeBonesProperty);
-        if (cap == null && strip == null)
-        { /* Neither setting exists on this importer - the model format may not
-             support skin weights at all (.obj), or this Unity version names them
-             differently.  Reported WITH the property names actually present,
-             because "unsupported" alone leaves the reader unable to tell those
-             two cases apart and therefore unable to fix either one. */
+        UnityEditor.SerializedProperty threshold = so.FindProperty(WeightThresholdProperty);
+        if (cap == null && strip == null && threshold == null)
+        { /* None of the three settings exists on this importer - the model
+             format may not support skin weights at all (.obj), or this Unity
+             version names them differently.  Reported WITH the property names
+             actually present, because "unsupported" alone leaves the reader
+             unable to tell those two cases apart and therefore unable to fix
+             either one. */
           report.Unsupported++;
-          NZK.E.C.w(67,path + " - tried " + MaxBonesProperty + " and " + OptimizeBonesProperty +
+          NZK.E.C.w(67,path + " - tried " + MaxBonesProperty + ", " + OptimizeBonesProperty +
+                        " and " + WeightThresholdProperty +
                         "; has: " + PropertyNames(so));
           continue; }
-        /* BOTH HALVES, OR NEITHER WORKS.  Capping the influence count without
-           stripping leaves the renderer declaring its FULL bone array - measured
-           on the reported avatar: every one of 39 SMRs declares 336 vertex
-           groups while using between 2 and 74.  That array is what the uploader
-           has to quantise, so a mesh weighted to 2 bones still ships a 336-group
-           skeleton.  The cap alone therefore does not fix the upload.
-           Stripping alone is not enough either: it removes bones nothing
-           references but leaves a vertex carrying up to 255 influences. */
+        /* ALL THREE HALVES, OR IT DOES NOT WORK.
+           Capping the influence count without stripping leaves the renderer
+           declaring its FULL bone array - measured on the reported avatar:
+           every one of 39 SMRs declares 336 vertex groups while using between 2
+           and 74.  That array is what the uploader has to quantise, so a mesh
+           weighted to 2 bones still ships a 336-group skeleton.  The cap alone
+           therefore does not fix the upload.  Stripping alone is not enough
+           either: it removes bones nothing references but leaves a vertex
+           carrying up to 255 influences.
+           A threshold left at its 0.01 default ALSO breaks the avatar, and it
+           is the half that is invisible.  The importer deletes any influence
+           under one percent while it reduces a vertex to four bones, so a
+           nanimation vertex group authored at 0.0000001 is DELETED at import
+           time.  The nanimation group is then simply absent from the imported
+           mesh: NanRelink loads that already-imported sub-asset, its per-vertex
+           source gate finds no nanimation name on any vertex, every vertex is
+           left with no handle, and each nanimation toggle is dead with no error
+           anywhere in the log.  Nothing downstream can re-create a group the
+           importer threw away, so the cutoff has to be driven to zero here,
+           where the deletion happens. */
         System.Boolean changed = false;
         if (cap != null && cap.intValue != MaxInfluences)
         { cap.intValue = MaxInfluences;
           changed = true; }
         if (strip != null && !strip.boolValue)
         { strip.boolValue = true;
+          changed = true; }
+        if (threshold != null && threshold.floatValue > ZeroThreshold)
+        { threshold.floatValue = ZeroThreshold;
           changed = true; }
         if (!changed) { report.Already++; continue; }
         so.ApplyModifiedPropertiesWithoutUndo();
@@ -169,6 +213,70 @@ public static partial class MeshImport {
         System.String p = UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh);
         if (NZK.S.Has(p) && !paths.Contains(p)) paths.Add(p); }
       return paths; }
+    /** <summary>Count the vertices still carrying exactly four non-zero bone
+     *  influences.
+     *
+     *  PROXY MEASUREMENT, and the reason is worth stating plainly: a bare
+     *  UnityEngine.Mesh exposes bone INDICES but no bone NAMES, so it cannot be
+     *  asked "which vertices belong to a nanimation group".  What it can be
+     *  asked is how many influences its vertices carry, and that is the
+     *  complementary signal.  Unity does not pad a vertex to four slots with
+     *  junk weights - the slot count a vertex reports is the count the importer
+     *  KEPT - so a mesh whose 1e-7 nanimation group survived the import shows
+     *  four influences on the grouped vertices, while a mesh whose group was
+     *  deleted by the threshold shows three or fewer on exactly those vertices.
+     *  The count therefore rises when the threshold fix takes and stays flat
+     *  when it does not, which is what makes the fix measurable instead of
+     *  assumed.
+     *
+     *  For the by-name answer, use NanRelink's group readers, which load the
+     *  model's own group names from the asset rather than from the Mesh.</summary> */
+    public static System.Int32 CountFourInfluenceVertices(UnityEngine.Mesh mesh)
+    { if (mesh == null) return 0;
+      UnityEngine.BoneWeight[] w = mesh.boneWeights;
+      if (NZK.B.mpty.t(w)) return 0;
+      System.Int32 bones = mesh.bindposes != null ? mesh.bindposes.Length : 0;
+      System.Int32 count = 0;
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { System.Int32 c = 0;
+        /* A slot counts only when it names a REAL bone.  An index outside the
+           bindpose range is a leftover slot the importer did not clear, and
+           counting it would report four influences on a vertex that has fewer,
+           which is the exact confusion this measurement exists to remove. */
+        System.Int32 b0 = w[i].boneIndex0, b1 = w[i].boneIndex1, b2 = w[i].boneIndex2, b3 = w[i].boneIndex3;
+        if (w[i].weight0 > 0f && b0 >= 0 && b0 < bones) c++;
+        if (w[i].weight1 > 0f && b1 >= 0 && b1 < bones) c++;
+        if (w[i].weight2 > 0f && b2 >= 0 && b2 < bones) c++;
+        if (w[i].weight3 > 0f && b3 >= 0 && b3 < bones) c++;
+        if (c == MaxInfluences) count++; }
+      return count; }
+    /** <summary>Log the import settings and the influence fingerprint for every
+     *  model referenced by the given objects.
+     *
+     *  This is the diagnostic that answers, from the log alone, whether the
+     *  threshold change took: a model still importing at weightThreshold 0.01
+     *  will report it here, and the influence count next to it shows whether the
+     *  nanimation group is being kept or thrown away.</summary> */
+    public static void ReportImpacts(UnityEngine.GameObject[] objs)
+    { System.Collections.Generic.HashSet<System.String> paths = PathsOf(objs);
+      if (NZK.B.mpty.t(paths)) return;
+      foreach (System.String path in paths)
+      { if (!NZK.S.Has(path)) continue;
+        UnityEditor.ModelImporter mi = UnityEditor.AssetImporter.GetAtPath(path) as UnityEditor.ModelImporter;
+        if (mi == null) { NZK.E.C.w(99,path); continue; }
+        System.Int32 four = 0;
+        UnityEngine.Object[] subs = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(path);
+        if (!NZK.B.mpty.t(subs))
+        { foreach (UnityEngine.Object o in subs)
+          { UnityEngine.Mesh m = o as UnityEngine.Mesh;
+            if (m == null) continue;
+            four += CountFourInfluenceVertices(m); } }
+        NZK.E.C.d(100,"model=" + System.IO.Path.GetFileName(path) +
+                      " maxBonesPerVertex=" + mi.maxBonesPerVertex +
+                      " optimizeBones=" + mi.optimizeBones +
+                      " weightThreshold=" + mi.weightThreshold +
+                      " fourInfluenceVerts=" + four); }
+    }
   
 }
 }
