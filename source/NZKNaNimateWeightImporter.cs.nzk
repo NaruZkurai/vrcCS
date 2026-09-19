@@ -108,6 +108,27 @@ public sealed class NZKNaNimateWeightImporter : UnityEditor.AssetPostprocessor
         if (!NZK.S.EndsWithOIC(assetPath, ".blend"))
             return;
         UnityEditor.ModelImporter importer = (UnityEditor.ModelImporter)assetImporter;
+        /* ORDER IS LOAD-BEARING: skinWeights = Custom MUST BE ASSIGNED FIRST.
+         *
+         * Unity validates these as they are set and warns - not errors - when
+         * they arrive while the mode is still Standard:
+         *
+         *   ModelImporter.maxBonesPerVertex is ignored unless
+         *     ModelImporter.skinWeights is set to ModelImporterSkinWeights.Custom
+         *   ModelImporter.minBoneWeight is ignored unless ...
+         *
+         * The assignments are DISCARDED in that state, so setting the mode last
+         * meant both the four-bone cap and the zero threshold were silently
+         * lost on every import.  Same class of failure as the original 255: the
+         * value is written, the warning is easy to read past because it is a
+         * warning and not an error, and the importer keeps its previous value.
+         *
+         * Measured on this project: with the mode last, the .meta kept
+         * skinWeightsMode 1 and the two settings below it had no effect.
+         */
+        importer.skinWeights = UnityEditor.ModelImporterSkinWeights.Custom;
+
+        /* Now the settings that Custom makes meaningful. */
         importer.minBoneWeight = 0f;
         /* FOUR influences, not 255.
          *
@@ -125,11 +146,6 @@ public sealed class NZKNaNimateWeightImporter : UnityEditor.AssetPostprocessor
          * (minBoneWeight = 0 preserves it) while giving VRChat the four
          * influences its skinning path is built around. */
         importer.maxBonesPerVertex = MaxInfluences;
-        /* skinWeights must be Custom. In Standard, Unity ignores
-         * maxBonesPerVertex/minBoneWeight and silently drops influences, which
-         * unbinds the NaNimate bones so the skinned meshes render wrong or not
-         * at all. Only Custom honours the weight settings above. */
-        importer.skinWeights = UnityEditor.ModelImporterSkinWeights.Custom;
         /* Read/Write must be enabled or the imported meshes carry no CPU-side
          * vertex/weight data, and reading them to generate standalone Mesh assets
          * yields empty files. This is a read-only requirement: it only asks Unity
