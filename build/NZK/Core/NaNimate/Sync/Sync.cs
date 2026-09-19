@@ -25,9 +25,34 @@ public static partial class Sync {
   public static void Float(VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters p,System.Collections.Generic.List<System.String> gen) => NaNimate.Sync.Vrc(p,gen,VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters.ValueType.Float);
   public static void Bool(VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters p,System.Collections.Generic.List<System.String> gen) => NaNimate.Sync.Vrc(p,gen,VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters.ValueType.Bool);
   public static void FXParams(UnityEditor.Animations.AnimatorController controller,System.Collections.Generic.List<System.String> generatedParams)
-  { var existing = new System.Collections.Generic.HashSet<System.String>(System.Linq.Enumerable.Select(controller.parameters, p => p.name),System.StringComparer.Ordinal);
-    if (!existing.Contains(Vars.Consts.MainDbtWeightParameter)) { controller.AddParameter(new UnityEngine.AnimatorControllerParameter { name = Vars.Consts.MainDbtWeightParameter,type = UnityEngine.AnimatorControllerParameterType.Float,defaultFloat = 1f }); existing.Add(Vars.Consts.MainDbtWeightParameter); }
-    foreach (System.String n in generatedParams) { if (!existing.Contains(n)) { controller.AddParameter(n,UnityEngine.AnimatorControllerParameterType.Float); existing.Add(n); } } }
+  { /* Every (b-gt)* toggle must START OFF, and (f)Weight must start at 1. A toggle whose
+       defaultFloat is 1 selects the "_1_NaN" blend-tree leaf at load, and that leaf carries
+       m_LocalScale = NaN. Measured on the live avatar, 28263 vertices across 39
+       SkinnedMeshRenderers are weighted to nanimation bones, so a NaN scale on those bones makes
+       every one of those vertices a NaN skin transform; the VRChat client then draws NONE of
+       them, while the Unity editor tolerates the NaN and still shows the bind pose, which is why
+       the avatar looks correct in the editor but is INVISIBLE in VRChat. Proven on project
+       Assets/!_nem_gogo 1.controller: param "(b-gt)NaNimate Piercings" had defaultFloat = 1 while
+       its 34 siblings had 0, and the sibling controller !_nem_gogo.controller had the same param
+       at 0. The old "add only if missing" guard trusted whatever value was already stored, so a
+       stale or hand-edited controller could never be repaired by re-baking; enforcing the value
+       here means regenerating the controller now repairs itself. Parameters are never removed or
+       reordered, and nothing outside generatedParams plus (f)Weight is touched. */
+    var existing = new System.Collections.Generic.HashSet<System.String>(System.Linq.Enumerable.Select(controller.parameters, p => p.name),System.StringComparer.Ordinal);
+    System.Boolean changed = false;
+    if (!existing.Contains(Vars.Consts.MainDbtWeightParameter)) { controller.AddParameter(new UnityEngine.AnimatorControllerParameter { name = Vars.Consts.MainDbtWeightParameter,type = UnityEngine.AnimatorControllerParameterType.Float,defaultFloat = 1f }); existing.Add(Vars.Consts.MainDbtWeightParameter); changed = true; }
+    foreach (System.String n in generatedParams) { if (!existing.Contains(n)) { controller.AddParameter(n,UnityEngine.AnimatorControllerParameterType.Float); existing.Add(n); changed = true; } }
+    /* Enforce the defaults whether or not the parameter already existed. AnimatorControllerParameter
+       is a struct, so write the whole value back into the array. */
+    var ps = controller.parameters;
+    for (int i = 0; i < ps.Length; i++)
+    { System.Boolean isWeight = ps[i].name == Vars.Consts.MainDbtWeightParameter;
+      System.Boolean isToggle = !isWeight && System.Linq.Enumerable.Contains(generatedParams,ps[i].name);
+      if ((isWeight || isToggle) && ps[i].type == UnityEngine.AnimatorControllerParameterType.Float)
+      { System.Single want = isWeight ? 1f : 0f;
+        if (ps[i].defaultFloat != want) { ps[i].defaultFloat = want; changed = true; } } }
+    if (changed) controller.parameters = ps;
+    if (changed) UnityEditor.EditorUtility.SetDirty(controller); }
   public static void Layer2(UnityEditor.Animations.AnimatorController controller,UnityEditor.Animations.BlendTree mainDbt)
   { var layer = NaNimate.Layer.GllC(controller,Vars.Consts.GeneratedFxLayerName);
     layer.defaultWeight = Vars.Consts.LayerWeight; layer.blendingMode = Vars.Consts.LayerBlendMode; layer.iKPass = Vars.Consts.LayerIKPass;

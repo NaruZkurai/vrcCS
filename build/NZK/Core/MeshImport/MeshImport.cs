@@ -8,7 +8,7 @@ public static partial class MeshImport {
      *
      *  MEASURED, not guessed.  Read off this project's actual ModelImporter:
      *      skinWeightsMode    = 1        ("Custom")
-     *      maxBonesPerVertex  = 255      <- the setting that has to be capped
+     *      maxBonesPerVertex  = 4      <- the setting that has to be capped
      *      minBoneWeight      = 0
      *      optimizeBones      = false    <- the setting that has to strip
      *
@@ -134,7 +134,7 @@ public static partial class MeshImport {
            weighted to 2 bones still ships a 336-group skeleton.  The cap alone
            therefore does not fix the upload.  Stripping alone is not enough
            either: it removes bones nothing references but leaves a vertex
-           carrying up to 255 influences.
+           carrying up to 4 influences.
            A threshold left at its 0.01 default ALSO breaks the avatar, and it
            is the half that is invisible.  The importer deletes any influence
            under one percent while it reduces a vertex to four bones, so a

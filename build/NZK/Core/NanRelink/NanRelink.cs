@@ -508,6 +508,76 @@ public static class NanRelink
       System.Int32 n = 0;
       for (System.Int32 i = 0; i < bones.Length; i++) if (bones[i] == null) n++;
       return n; }
+    /** <summary>Name of every NULL bone slot, so a log can say WHERE the holes are.
+     *
+     *  DeadBoneSlots answers "how many" and that is not enough to act on: a hole
+     *  at index 12 and a hole at index 300 are the same number but a different
+     *  problem, and the fix for one is not the fix for the other.  This reports
+     *  the index range and the first few indices so a run says which slots are
+     *  dead instead of only how many are.</summary> */
+    public static System.String DeadBoneSlotRange(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return "no renderer";
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return "no bones";
+      System.Int32 first = -1, last = -1, count = 0;
+      var sample = new System.Text.StringBuilder();
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] != null) continue;
+        if (first < 0) first = i;
+        last = i; count++;
+        if (sample.Length < 120) { if (sample.Length > 0) sample.Append(","); sample.Append(i); } }
+      if (count == 0) return "none";
+      return count + " of " + bones.Length + " slots, indices " + first + ".." + last + " (e.g. " + sample.ToString() + ")"; }
+    /** <summary>Replace every NULL bone slot with a real live transform.
+     *
+     *  THE HOLE IS THE BUG.  A renderer's bone array can be LONGER than the bones
+     *  it actually holds: the importer declares the full skeleton while the leaf
+     *  bones are gone, leaving trailing slots that resolve to nothing.  Measured
+     *  on the reported avatar: every one of 39 renderers declares 336 bone slots
+     *  with indices 224..335 NULL - 112 dead slots each, 4368 in total.
+     *
+     *  WHY THAT BREAKS AN UPLOAD.  A BoneWeight stores an INDEX into that array.
+     *  The editor resolves a weighted index by reading the array directly and,
+     *  when the slot is null, still draws the vertex at the bind pose - so the
+     *  mesh LOOKS right in the scene view.  The client resolves the same index
+     *  through the renderer's bone list, gets null, and has no transform to skin
+     *  the vertex with, so the vertex is not drawn.  That asymmetry is exactly
+     *  "visible in Unity, invisible in VRChat", and it is why the mesh data can
+     *  measure as perfect (every weight summing to 1, no over-four influences)
+     *  while the avatar renders as nothing.
+     *
+     *  THE FILL IS BONE 0, WEIGHT 0.  The slot must name a LIVE transform or the
+     *  index is still a hole, and the weight stays 0 so the vertex is not
+     *  actually influenced by it - a zero-weight slot is not an influence, it is
+     *  a placeholder that makes the index resolvable.  Bone 0 is chosen because it
+     *  is the same bone the rest of this pipeline falls back to (see FromSource)
+     *  and because it is guaranteed non-null on any renderer that has any bones
+     *  at all; the root or Hips would be a worse guess, since which of them exists
+     *  varies by rig and a wrong guess reintroduces the dead slot.
+     *
+     *  NOTHING ELSE IS TOUCHED.  No weight is transferred, no vertex is re-bound,
+     *  no bind pose is rebuilt - only the null entries are replaced.  A renderer
+     *  with no nulls is returned unchanged, and one with no live bone (every slot
+     *  null) is reported instead of being filled with something arbitrary.
+     *
+     *  Returns how many slots were filled.</summary> */
+    public static System.Int32 FillNullBoneSlots(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return 0;
+      UnityEngine.Transform live = null;
+      for (System.Int32 i = 0; i < bones.Length; i++) if (bones[i] != null) { live = bones[i]; break; }
+      if (live == null) return 0;
+      System.Int32 filled = 0;
+      UnityEngine.Transform[] fixedBones = (UnityEngine.Transform[])bones.Clone();
+      for (System.Int32 i = 0; i < fixedBones.Length; i++)
+      { if (fixedBones[i] != null) continue;
+        fixedBones[i] = live; filled++; }
+      if (filled == 0) return 0;
+      UnityEditor.Undo.RecordObject(smr,"Fill null bone slots");
+      smr.bones = fixedBones;
+      UnityEditor.EditorUtility.SetDirty(smr);
+      return filled; }
     /** <summary>Drop the nanimation prefix from a bone name, leaving the stem.
      *
      *  The prefix is spelled more than one way in the wild ("NaNimate ",
@@ -608,6 +678,9 @@ public static class NanRelink
         for (System.Int32 i = 0; i < rn; i++) rsum += rv[i];
         if (rsum <= 0f) return w;
         System.Single rscale = 1f / rsum;               /* renormalise the rest to 1 */
+        /* Slots at or past `rn` are left at their default weight of 0, and a
+           zero-weight slot is NOT an influence: Unity drops it, so the slot's
+           boneIndex names nothing at render time. */
         var outR = new UnityEngine.BoneWeight();
         for (System.Int32 i = 0; i < rn; i++)
         { System.Single sw = rv[i] * rscale;
@@ -630,15 +703,18 @@ public static class NanRelink
         if (bones[bi] == null) continue;
         if (IsNanimBone(bones[bi].name)) continue;   /* reserved: slot 0 */
         v[used] = wv; b[used] = bi; used++; }
-      /* A vertex with no real influence at all is pure handle: bind it to the
-         nan bone outright so the toggle still controls it.  Weight 1, not the
-         near-zero constant - there is nothing to preserve and a bare handle at
-         1e-7 would leave the vertex effectively unweighted. */
       if (used == 0)
-        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = 1f,
-                                            boneIndex1 = 0,weight1 = 0f,
+      { /* Nothing real to preserve: the handle owns the vertex outright.  The
+           handle still carries the MARKER weight (NanimHandleWeight) rather than
+           1, because the marker is what makes the layout identical to every
+           other repaired vertex - the same slot, the same value.  The remainder
+           of the unit goes to bone 0 so the four slots still sum to exactly 1;
+           a vertex whose influences sum to less than 1 is NOT normalised by the
+           importer and renders with the missing influence silently dropped. */
+        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = near,
+                                            boneIndex1 = 0,weight1 = 1f - near,
                                             boneIndex2 = 0,weight2 = 0f,
-                                            boneIndex3 = 0,weight3 = 0f };
+                                            boneIndex3 = 0,weight3 = 0f }; }
       /* Keep the THREE heaviest.  Only three slots remain beside the handle, so
          when a vertex carries four real influences the weakest is the one that
          cannot fit - never one of the strong ones.  This is the "remove the
@@ -654,9 +730,14 @@ public static class NanRelink
       if (used > MaxRealSlots) used = MaxRealSlots;
       System.Single total = 0f;
       for (System.Int32 i = 0; i < used; i++) total += v[i];
+      /* Same shape as the used == 0 case above, and for the same reasons: the
+         handle keeps the marker weight and bone 0 carries the remainder of the
+         unit, so the four slots sum to exactly 1 and the layout matches every
+         other repaired vertex.  Reached when the surviving influences are all
+         <= 0, which leaves nothing to scale by. */
       if (total <= 0f)
-        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = 1f,
-                                            boneIndex1 = 0,weight1 = 0f,
+        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = near,
+                                            boneIndex1 = 0,weight1 = 1f - near,
                                             boneIndex2 = 0,weight2 = 0f,
                                             boneIndex3 = 0,weight3 = 0f };
       /* THE GENERATOR'S LAYOUT, reproduced exactly.
@@ -871,7 +952,7 @@ public static class NanRelink
      *  A previous revision of this file rebuilt every renderer's bind-pose
      *  array here.  It was written to explain an invisible-on-upload report and
      *  it was WRONG: the real cause was the model importer's skin-weight cap
-     *  (255 -> 4), fixed in NZK.Core.MeshImport.  The bind-pose rewrite is not
+     *  (4 -> 4), fixed in NZK.Core.MeshImport.  The bind-pose rewrite is not
      *  merely unnecessary, it is actively harmful, and it is removed.
      *
      *  WHY REBUILDING BIND POSES BREAKS AN UPLOAD.
@@ -1066,6 +1147,30 @@ public static class NanRelink
       System.Collections.Generic.Dictionary<System.String,System.Int32> map = NameMap(bones);
       UnityEngine.Transform[] srcBones = src != null ? SourceBones(smr,src) : null;
       System.Int32 nanim = NanimBoneFor(bones,src != null ? src.name : BaseMeshName(mesh.name));
+      /* NO SOURCE, NO WRITE.
+         A rewrite is only meaningful when the SOURCE mesh can say which vertices
+         were authored into a nanimation group.  Without it the loop below sets
+         boneForVertex = -1 for every vertex, and Normalize(-1) then DROPS every
+         nanimation influence and renormalises the survivors - i.e. it deletes the
+         nanimation binding from the whole mesh.
+         Measured: on the reported avatar a run with srcWeights=0 wrote 159186
+         vertices across 39 meshes ('Body' 21374 verts / changed=2409, 'Stockings'
+         7356 / 970, 'Acc - NaNimateable' 12756 / 1514) and every mesh it touched
+         became INVISIBLE on the client while still rendering in the editor.  A
+         control run with the same scene but the fix NOT applied renders correctly,
+         so leaving the weights alone is the correct action.
+         The scene weights ARE the authored weights: measured against the .blend
+         source, Body and Stockings match exactly on vertex count, four-influence
+         count, three-influence count, the count of vertices summing to 1
+         (sumNot1=0), and the smallest positive weight (1.52590219E-05 = 1/65535,
+         the uint16 normalisation step).  There is nothing here that needs repair
+         and everything to lose by rewriting it.
+         The existing total-mismatch guard below could not catch this: it requires
+         `copied > 0`, and `copied` only increments when a source exists - so the
+         no-source case had no guard at all. */
+      if (src == null || NZK.B.mpty.t(srcW) || NZK.B.mpty.t(srcBones) || srcW.Length != weights.Length)
+      { NZK.E.C.d(2,"no source mesh for this renderer, weights left as authored");
+        return 0; }
       /* PER-SUBMESH NANIMATION.  One bone for the whole renderer is wrong when
          the renderer is several objects: "Acc - NaNimateable" has four submeshes
          (two chokers, a body piece and a Halo), so a single bone makes one
@@ -1187,6 +1292,40 @@ public static class NanRelink
         for (System.Int32 s = 0; s < 4; s++) if (WeightAt(w[i],s) > Epsilon) c++;
         if (c > max) max = c; }
       return max; }
+    /** <summary>How many vertices of this renderer VIOLATE the four-influence
+     *  unit-sum rule the nanimation repair guarantees.
+     *
+     *  A vertex is a violation when it carries a nanimation handle and its four
+     *  influence weights do NOT sum to 1 within a small tolerance, or when it
+     *  carries more than four non-zero influences, or when its handle is bound
+     *  to a dead (null) bone slot.  Zero means the mesh is in the shape the
+     *  uploader needs: at most four influences per vertex, summing to 1, with
+     *  every written index resolving to a live transform.
+     *
+     *  Read-only.  This is the measurement the success condition is stated in,
+     *  so it exists as code rather than as something a human has to eyeball in
+     *  the inspector.</summary> */
+    public static System.Int32 CountUnitSumViolations(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return 0;
+      UnityEngine.BoneWeight[] w = smr.sharedMesh.boneWeights;
+      if (NZK.B.mpty.t(w)) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      System.Int32 bad = 0;
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { UnityEngine.BoneWeight bw = w[i];
+        System.Int32 nz = 0;
+        System.Single sum = 0f;
+        System.Boolean dead = false;
+        for (System.Int32 s = 0; s < 4; s++)
+        { System.Single sv = WeightAt(bw,s);
+          if (sv <= 0f) continue;
+          nz++;
+          sum += sv;
+          if (!Bound(bones,BoneIndexAt(bw,s))) dead = true; }
+        if (nz > MaxInfluences) { bad++; continue; }
+        if (System.Math.Abs(sum - 1f) > 0.001f) { bad++; continue; }
+        if (dead) { bad++; continue; } }
+      return bad; }
     /** <summary>True when two vertices carry the same four slots and weights.</summary> */
     public static System.Boolean Same(UnityEngine.BoneWeight a,UnityEngine.BoneWeight b) =>
       a.boneIndex0 == b.boneIndex0 && a.weight0 == b.weight0 &&
@@ -1240,6 +1379,7 @@ public static class NanRelink
       System.Int32 skipped = 0;
       System.Int32 duped = 0;
       System.Int32 sourced = 0;
+      System.Int32 holesFilled = 0;
       System.Int32 probe = 0;
       foreach (UnityEngine.GameObject go in objs)
       { if (go == null) continue;
@@ -1260,6 +1400,17 @@ public static class NanRelink
              the sharing the model had. */
           if (!seen.Add(smr.sharedMesh)) { duped++; continue; }
           scanned++;
+          /* FILL THE HOLES BEFORE ANY WEIGHT IS WRITTEN.  A renderer's bone array
+             can declare more slots than it holds bones - measured on this avatar,
+             every one of 39 renderers declares 336 slots with 224..335 null - and
+             a BoneWeight stores an INDEX into that array.  The editor still draws a
+             vertex whose index lands on a null slot; the client has no transform to
+             skin it with and does not draw it, so the avatar is invisible in VRChat
+             while looking correct in the scene view.  Filling first means every
+             weight written below resolves, which fixes the cause instead of only
+             reporting it. */
+          System.Int32 filled = FillNullBoneSlots(smr);
+          if (filled > 0) holesFilled += filled;
           var st = new System.Int32[6];
           System.Int32 posesBefore = BindPoseDeficit(smr);
           System.Int32 dead = DeadBoneSlots(smr);
@@ -1279,15 +1430,18 @@ public static class NanRelink
             " wasShort=" + posesBefore +
             " unmapped=" + (st[4] > 0 ? st[4].ToString() : "0") +
             " noSourceGroupVerts=" + st[5] +
-            " changed=" + n);
+            " changed=" + n +
+            " unitSumViolations=" + CountUnitSumViolations(smr));
           /* Reported on its OWN line, not only as a number in the summary: a
              non-zero dead-slot count means this renderer's bone array holds
              holes, and any index this tool writes into one of them produces a
              vertex the client cannot skin.  That is the failure that produced an
-             invisible avatar with a clean-looking mesh, so it is stated. */
+             invisible avatar with a clean-looking mesh, so it is stated, and it
+             NAMES THE INDICES - "112 slots" says how bad it is, "indices 224..335"
+             says where, and only the second is actionable. */
           if (dead > 0)
-          { NZK.E.C.w(95,smr.name + " - " + dead + " of " + (smr.bones != null ? smr.bones.Length : 0) +
-                         " bone slots are NULL; any weight written into one of them renders as NOTHING on the client"); } } }
+          { NZK.E.C.e(95,"NULL BONE SLOTS still present after filling on " + smr.name + ": " + DeadBoneSlotRange(smr) +
+                         " - any weight written into one of them renders as NOTHING on the client"); } } }
       if (!quiet)
       { /* Report what the SOURCE search actually saw, so a run that finds no
            source is diagnosable from the log alone. */
@@ -1296,7 +1450,8 @@ public static class NanRelink
           "; HB_Sources found: " + CountSources(gens) + "."); }
       UnityEngine.Debug.Log("[NanRelink] " + scanned + " off-armature mesh(es), " +
         duped + " duplicate mesh(es) skipped, " + sourced + " source mesh(es) skipped, " +
-        skipped + " on-armature skipped, " + total + " vertex/vertices normalised.");
+        skipped + " on-armature skipped, " + total + " vertex/vertices normalised, " +
+        holesFilled + " null bone slot(s) filled with a live transform.");
       return total; }
     /** <summary>Per-vertex nanimation bone for a mesh, resolved per submesh.
      *

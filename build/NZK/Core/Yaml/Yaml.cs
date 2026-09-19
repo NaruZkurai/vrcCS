@@ -165,13 +165,64 @@ public static partial class Yaml {
     /** <summary>Read the "flags: n" value of a line ("" when not a flag line). </summary> */
     public static System.String Flags(System.String line) =>
       IsFlagLine(line) ? Value(line.Trim()) : "";
-    /** <summary>Set EVERY "flags: n" line to the given value; returns the new text. </summary> */
+    /** <summary>Set the "flags: n" line to the given value ONLY for scale curves; returns the new text. </summary>
+     *  <para>A Unity .anim curve block is the group of lines that starts at "- curve:" and runs to
+     *  the next "- " list item or top-level key. "attribute:" precedes "flags:" inside a block,
+     *  but other keys can sit between them, so blocks are walked line by line and the LAST
+     *  "attribute:" seen is remembered until the block boundary.</para>
+     *  <para>Only blocks whose attribute names a scale property ("m_LocalScale.x/y/z", see AttrScale)
+     *  count, plus every block inside an "m_ScaleCurves:" section (those rows carry no attribute:).
+     *  Every other "flags:" line is emitted byte-for-byte unchanged.</para>
+     *  <para>Why: "flags" is the binding class marker of the curve, not a data value. "16" is the
+     *  SCALE flag (FlagsScale), "0" the plain flag (FlagsNone). Nan.ScaleToNaN (nan.cs.nzk:87) and
+     *  Nan.ScaleForceNaN (nan.cs.nzk:118) both end with SetFlags(o,FlagsScale), so the old
+     *  document-global regex relabelled rotation, position, path, m_IsActive and material curves as
+     *  scale too on EVERY avatar upload and every right-click "Fix Zero Scale Animations".</para>
+     *  <para>PROVEN DAMAGE in the live project (not a git repo: no history and no undo):
+     *  Assets/NZK/anims/HeadSwap On.anim line 689 is "flags: 16" ending an m_LocalPosition.x curve
+     *  (its "attribute: m_LocalPosition.x" is line 685), with the same at lines 719 (.y) and 749 (.z),
+     *  plus m_IsActive rows and material-curve rows; project-wide "flags: 0" x5780, "flags: 16" x10821,
+     *  "flags: 2" x42, and 754 .anim files carry "flags: 16". The toolkit's own authoring template
+     *  writes "flags: 0" for its m_LocalScale.x/y/z rows, so "16" is post-process-only corruption.
+     *  The corruption is idempotent: rewriting 16 -> 16 returns the input unchanged, so ScaleToNaN
+     *  returns null and FixAnimationClipScale bails out early and the 754 damaged files can never
+     *  self-heal through the old path.</para>
+     *  <para>IsScaleAttr stays the single-line predicate for "is this line a scale curve marker";
+     *  SetFlags is now the block-aware equivalent that also honours the preceding "attribute:".</para>
+     *  <para>Returns the ORIGINAL text reference when nothing changed, so the o == text identity
+     *  check in Nan.ScaleToNaN still works.</para>
+     *  <remarks>No regex and no 'using': every type is fully qualified and the line walk is
+     *  StringBuilder-free so that line endings and all other characters are preserved exactly.</remarks> */
     public static System.String SetFlags(System.String text,System.String flags)
     { if (System.String.IsNullOrEmpty(text)) return text;
-      var rx = new System.Text.RegularExpressions.Regex("(?m)^(\\s*flags:\\s*)(\\S+)\\s*$");
-      return rx.Replace(text,m => m.Groups[2].Value == flags
-        ? m.Value
-        : m.Groups[1].Value + flags); }
+      /* Split WITHOUT dropping anything: split and rejoin with '\n' reproduces the input
+         byte-for-byte (this is used on a '"' + '\n' + '"-separated line list, never on the '\u00a7' form). */
+      var lines = text.Split('\n');
+      /* Scale curve sections whose rows have no "attribute:" line. */
+      var scaleSectionKeys = new System.String[] { KeyScaleCurves,KeyEditorCurves,"m_PositionCurves:","m_RotationCurves:","m_EulerCurves:","m_CompressedRotationCurves:","m_GenericBindings:" };
+      System.Boolean inScaleSection = false, blockIsScale = false, anyChange = false;
+      for (int i = 0; i < lines.Length; i++)
+      { System.String raw = lines[i];
+        System.String t = raw.Trim();
+        /* Block boundary: a new list item, a new document key, or a "--- !u!" marker. */
+        if (t.StartsWith("- ") || (t.Length > 0 && raw.Length > 0 && raw[0] != ' ' && raw[0] != '\t') || t.StartsWith(Doc))
+        { blockIsScale = inScaleSection; }
+        /* Track "m_ScaleCurves:" vs any other top-level m_ key. */
+        if (t.Length > 0 && raw.Length > 0 && raw[0] != ' ' && raw[0] != '\t')
+        { for (int k = 0; k < scaleSectionKeys.Length; k++)
+            if (t.StartsWith(scaleSectionKeys[k])) { inScaleSection = k == 0; k = scaleSectionKeys.Length; } }
+        /* Remember the last attribute: seen in this block. */
+        if (t.StartsWith("attribute:")) blockIsScale = t.Substring(10).Trim().StartsWith(AttrScale);
+        /* Only rewrite the flag when the current block is a scale curve. */
+        if (t.StartsWith(FlagsKey))
+        { System.String cur = t.Substring(FlagsKey.Length).Trim();
+          if (blockIsScale && cur != flags)
+          { var nl = raw.IndexOf('\n');
+            System.String body = nl < 0 ? raw : raw.Substring(0,nl);
+            System.String end  = nl < 0 ? "" : raw.Substring(nl);
+            lines[i] = body.Substring(0,body.Length - cur.Length) + flags + end;
+            anyChange = true; } } }
+      return anyChange ? System.String.Join("\n",lines) : text; }
     /** <summary>True when v parses as a real number (NaN/Inf rejected as text "NaN"). </summary> */
     public static System.Boolean IsNumber(System.String v)
     { System.Single f;

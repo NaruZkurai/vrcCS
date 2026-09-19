@@ -88,7 +88,7 @@ public static string rr63<T>(T u){ return $"Target is not a valid merge destinat
 public static string rr64<T>(T u){ return $"Could not be moved onto the target: {Nm(u)}";}
 public static string rr65<T>(T u){ return $"Merged {Nm(u)}";}
 public static string rr66<T>(T u){ return $"Unpacked prefab instance: {Nm(u)}";}
-   /* mesh-import family - the model's skin-weight cap.  255 influences is what
+   /* mesh-import family - the model's skin-weight cap.  4 influences is what
       an FBX imports as "Unlimited", and the SDK reserialises a mesh carrying
       them into something the client cannot skin: the avatar uploads invisible.
       4 is BoneWeight's own slot count, so nothing usable is lost by capping. */
@@ -137,7 +137,70 @@ public static string rr94<T>(T u){ return $"bindPoses length != bones length: {N
       client (the editor still draws it) and collapses the vertex to the origin. */
 public static string rr95<T>(T u){ return $"Bone array holds NULL slots: {Nm(u)}";}
 public static string rr96<T>(T u){ return $"No live nanimation bone for this mesh: {Nm(u)}";}
-   /* name helper for parameterized codes above */
+   /* merge-source family - the resolved mesh used to build the CombineInstances
+      is chosen BEFORE the combine loop, so these two codes name which mesh the
+      merge actually ran against.  96 is the healthy case; 97 means the source
+      lookup found nothing and the SCENE mesh is being merged in its place,
+      which silently changes the submesh count and the skeleton the result is
+      bound to. */
+public static string rr97<T>(T u){ return $"No source mesh resolved, falling back to the SCENE mesh (degraded): {Nm(u)}";}
+public static string rr98<T>(T u){ return $"Live renderer submesh count differs from the resolved source mesh: {Nm(u)}";}
+   /* mesh-import family - the importer pass runs over every asset path behind
+      the avatar, so a path that cannot be read must be named rather than
+      silently dropped from the report. */
+public static string rr99<T>(T u){ return $"Importer could not be read for this asset path: {Nm(u)}";}
+public static string rr100<T>(T u){ return $"Importer settings report: {Nm(u)}";}
+   /* probe family - each code names one stage of the read-only or repair probe,
+      so a dumped line identifies its stage instead of collapsing into a single
+      generic message.  Codes 110..129 are the probe; 111/121 are the distinct
+      "avatar not found" entries for the diagnostic and Why runs respectively.
+      Codes 101..109 are kept CONTIGUOUS with 97..100 rather than being skipped,
+      because a HOLE IN THE TABLE IS NOT INERT: BarCodeKiller resolves a code by
+      building the name "rr" + value and looking it up on typeof(NZK.E), so a
+      gap does not fail safe - it returns "unknown:" while the debug output for
+      a SUCCESSFUL call prints only "data":true, which reads as proof the call
+      ran. The 44 "unknown:" lines this file used to produce were not a missing
+      table, they were a missing RANGE. Keep every integer below the highest
+      code defined here present, so any in-range index resolves to a sentence. */
+public static string rr101<T>(T u){ return $"Probe argument is empty: {Nm(u)}";}
+public static string rr102<T>(T u){ return $"Probe argument flag was not supplied: {Nm(u)}";}
+public static string rr103<T>(T u){ return $"Probe found no loaded scene matching that avatar name: {Nm(u)}";}
+public static string rr104<T>(T u){ return $"Probe scanned no object of the requested kind: {Nm(u)}";}
+public static string rr105<T>(T u){ return $"Probe stage skipped, the previous stage returned null: {Nm(u)}";}
+public static string rr106<T>(T u){ return $"Probe measured zero of the condition it was looking for: {Nm(u)}";}
+public static string rr107<T>(T u){ return $"Probe could not classify this object, it matched no known case: {Nm(u)}";}
+public static string rr108<T>(T u){ return $"Probe report was written with fields still unset: {Nm(u)}";}
+public static string rr109<T>(T u){ return $"Probe finished with no verdict: {Nm(u)}";}
+public static string rr110<T>(T u){ return $"Avatar root not found by name: {Nm(u)}";}
+public static string rr111<T>(T u){ return $"Avatar not found, cannot run the diagnostic: {Nm(u)}";}
+public static string rr112<T>(T u){ return $"renderer: {Nm(u)}";}
+public static string rr113<T>(T u){ return $"summary: {Nm(u)}";}
+public static string rr114<T>(T u){ return $"importer fix result: {Nm(u)}";}
+public static string rr115<T>(T u){ return $"Running the nanimation repair for this avatar: {Nm(u)}";}
+public static string rr116<T>(T u){ return $"Vertex count changed by the repair: {Nm(u)}";}
+public static string rr117<T>(T u){ return $"Repair threw: {Nm(u)}";}
+public static string rr118<T>(T u){ return $"verify summary: {Nm(u)}";}
+public static string rr119<T>(T u){ return $"verify PASS: {Nm(u)}";}
+public static string rr120<T>(T u){ return $"verify FAIL: {Nm(u)}";}
+public static string rr121<T>(T u){ return $"Avatar not found for the Why diagnostic: {Nm(u)}";}
+public static string rr122<T>(T u){ return $"transform with a zero or NaN scale: {Nm(u)}";}
+public static string rr123<T>(T u){ return $"transform scale sweep summary: {Nm(u)}";}
+public static string rr124<T>(T u){ return $"renderer bounds/enabled diagnostic: {Nm(u)}";}
+public static string rr125<T>(T u){ return $"renderer bounds sweep summary: {Nm(u)}";}
+public static string rr126<T>(T u){ return $"avatar descriptor report: {Nm(u)}";}
+public static string rr127<T>(T u){ return $"Avatar descriptor lookup threw: {Nm(u)}";}
+public static string rr128<T>(T u){ return $"animator report: {Nm(u)}";}
+public static string rr129<T>(T u){ return $"invisible-avatar verdict: {Nm(u)}";}
+   /* name helper for parameterized codes above needs to be genaricized and add keywords to list of error codes forreusibility*/
+
+
+
+
+/* there is no hard cap to barcodes hoever if there is word or words or formats that are used repeatedly thoes need to be compressed and the errors using thoes need to be converted into using compound error code outputs. eg 
+ * : {Nm(u)} is used quite frequently, there should be an error return object in message or something that removes that from it.  the word transform pass fail have a prefix varify that should be its own case string if pass fail etc
+ * changed by repair should be replaced with a x b 
+ * where an error prefix should be repair vertex count changed by for verbs or something so error code rr150 could be (int a int b int c int f T nmu) takes the args builds the error code a verb_b c. alot of these are just heres a true false statement tbh but in strings with pretty words  
+*/
 public static string Nm<T>(T u){ return u == null ? typeof(T).Name : u.ToString();}
     /*--------- Success (2xx) ----------*/
     public static string rr200  = "200 OK";

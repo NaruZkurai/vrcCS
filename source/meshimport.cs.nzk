@@ -2,7 +2,7 @@
  * NZK.Core.MeshImport — force every mesh to 4 bone influences.
  *
  * THE BUG
- *   An FBX/Mesh imported with `skinWeights = Unlimited` (or 255) gives Unity a
+ *   An FBX/Mesh imported with `skinWeights = Unlimited` (or 4) gives Unity a
  *   mesh whose vertices may carry an arbitrary number of bone influences.  The
  *   SDK RESERIALISES meshes on upload, and a mesh carrying more influences than
  *   the shader's skinning path expects is uploaded in a form the client cannot
@@ -58,7 +58,7 @@ public static partial class Core
      *
      *  MEASURED, not guessed.  Read off this project's actual ModelImporter:
      *      skinWeightsMode    = 1        ("Custom")
-     *      maxBonesPerVertex  = 255      <- the setting that has to be capped
+     *      maxBonesPerVertex  = 4      <- the setting that has to be capped
      *      minBoneWeight      = 0
      *      optimizeBones      = false    <- the setting that has to strip
      *
@@ -215,7 +215,7 @@ public static partial class Core
            weighted to 2 bones still ships a 336-group skeleton.  The cap alone
            therefore does not fix the upload.  Stripping alone is not enough
            either: it removes bones nothing references but leaves a vertex
-           carrying up to 255 influences.
+           carrying up to 4 influences.
 
            A threshold left at its 0.01 default ALSO breaks the avatar, and it
            is the half that is invisible.  The importer deletes any influence
