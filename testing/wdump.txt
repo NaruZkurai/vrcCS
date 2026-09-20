@@ -1,0 +1,5 @@
+=== Stockings v=7649 bones=256
+   nanimVerts=7649 mixed=0 soleNanim=7649 multiInfluence=0 badSum=0 sum=1..1
+=== TJacket - Leather Jacket v=1808 bones=228
+   nanimVerts=1744 mixed=0 soleNanim=1744 multiInfluence=64 badSum=0 sum=0.9999999..1
+

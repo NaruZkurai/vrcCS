@@ -1,0 +1,16 @@
+v357: vrc.Chest=0.81549 vrc.Spine=0.18341 NaNimate Leather Jacket=0.00110 
+v358: vrc.Chest=0.80814 vrc.Spine=0.19076 NaNimate Leather Jacket=0.00110 
+v359: vrc.Chest=0.84036 vrc.Spine=0.15854 NaNimate Leather Jacket=0.00110 
+v361: vrc.Chest=0.85477 vrc.Spine=0.14413 NaNimate Leather Jacket=0.00110 
+v365: vrc.Chest=0.86791 vrc.Spine=0.13099 NaNimate Leather Jacket=0.00110 
+v369: vrc.Chest=0.88183 vrc.Spine=0.11707 NaNimate Leather Jacket=0.00110 
+v373: vrc.Chest=0.89815 vrc.Spine=0.10075 NaNimate Leather Jacket=0.00110 
+v377: vrc.Chest=0.91666 vrc.Spine=0.08224 NaNimate Leather Jacket=0.00110 
+v381: vrc.Chest=0.92743 vrc.Spine=0.07147 NaNimate Leather Jacket=0.00110 
+v385: vrc.Chest=0.94523 vrc.Spine=0.05367 NaNimate Leather Jacket=0.00110 
+v389: vrc.Chest=0.95785 vrc.Spine=0.03946 vrc.Shoulder_L=0.00159 NaNimate Leather Jacket=0.00110 
+v393: vrc.Chest=0.97264 vrc.Spine=0.02272 vrc.Shoulder_L=0.00354 NaNimate Leather Jacket=0.00110 
+v396: vrc.Chest=0.98455 vrc.Shoulder_R=0.00796 vrc.Spine=0.00640 NaNimate Leather Jacket=0.00110 
+v400: vrc.Chest=0.98525 vrc.Shoulder_R=0.01365 NaNimate Leather Jacket=0.00110 
+v402: vrc.Chest=0.97894 vrc.Shoulder_R=0.01996 NaNimate Leather Jacket=0.00110 
+

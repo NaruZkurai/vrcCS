@@ -1,0 +1,11 @@
+=== probe Sat 19 Sep 2026 10:24:56 PM EDT ===
+group=NaNimations bones=38
+=== Stockings
+  BEFORE v=7649 bones=256
+  MeshesInspected=0 MeshesRebuilt=0 VerticesSplit=0 BonesCreated=0 BuffersCreated=0 MeshesSkipped=1 error=already processed: bone '__NZK_NanimBone_NaNimate Jeans_0'
+  AFTER  v=7649 bones=256
+=== TJacket - Leather Jacket
+  BEFORE v=1808 bones=228
+  MeshesInspected=0 MeshesRebuilt=0 VerticesSplit=0 BonesCreated=0 BuffersCreated=0 MeshesSkipped=1 error=already processed: bone '__NZK_NanimBone_NaNimate Leather Jacket_0'
+  AFTER  v=1808 bones=228
+

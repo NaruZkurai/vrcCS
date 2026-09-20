@@ -439,6 +439,79 @@ public static partial class Core
               report.VerticesSplit++; }
             tri[p+k] = dup; } } }
 
+      /* ── 2b. ONE GROUP PER VERTEX ───────────────────────────────────
+       *
+       * The triangle pass above only splits where a PRIMITIVE's key differs, so
+       * a vertex no triangle rewrote can still carry SEVERAL group bits.  That
+       * is the partial-nanimation corruption: the first group claims it and
+       * zeroes its other influences, every later group then finds a vertex with
+       * no usable influence, drops it as "cannot be hidden", and that garment
+       * keeps vertices that never react to its toggle.  The surface stretches
+       * instead of vanishing - the "drooping" the user reported, present in
+       * EDIT mode too because it is baked into the weights, not the animation.
+       *
+       * Fix: split every multi-bit vertex into one copy per bit, then repoint
+       * the triangles that use it.  A triangle needs the copy carrying the one
+       * group that selects it, so its own AND-key decides - the lowest bit
+       * present is the group whose toggle must be able to hide it.
+       *
+       * PERFORMANCE, and it matters here.  Repointing inside the per-vertex
+       * loop meant scanning every triangle for every split vertex: on this mesh
+       * 13018 vertices against ~12000 triangles is ~156 million iterations, and
+       * the editor stopped responding entirely.  So the two halves are separated
+       * - build the clone table first, then walk the triangles exactly ONCE and
+       * redirect each index it contains.  O(V + T) instead of O(V x T). */
+      System.Collections.Generic.List<System.UInt64> splitFirstBit =
+        new System.Collections.Generic.List<System.UInt64>();
+      System.Collections.Generic.List<System.Collections.Generic.Dictionary<System.UInt64,System.Int32>> splitClones =
+        new System.Collections.Generic.List<System.Collections.Generic.Dictionary<System.UInt64,System.Int32>>();
+      for (System.Int32 v = 0; v < newToOrig.Count; v++)
+      { System.UInt64 key = newHideKey[v];
+        System.UInt64 rest = key;
+        System.Int32 bits = 0;
+        while (rest != 0) { bits += (System.Int32)(rest & 1UL); rest >>= 1; }
+        /* The parallel lists are indexed by the ORIGINAL vertex id, so pad them
+         * for every vertex seen so far - clones appended below are already
+         * single-bit and never need an entry of their own. */
+        if (bits <= 1) { splitFirstBit.Add(0UL); splitClones.Add(null); continue; }
+
+        System.UInt64 firstBit = key & (System.UInt64)(-(System.Int64)key);
+        newHideKey[v] = firstBit;
+        splitFirstBit.Add(firstBit);
+
+        System.Collections.Generic.Dictionary<System.UInt64,System.Int32> bitToVert =
+          new System.Collections.Generic.Dictionary<System.UInt64,System.Int32>();
+        System.UInt64 remain = key & ~firstBit;
+        while (remain != 0)
+        { System.UInt64 one = remain & (System.UInt64)(-(System.Int64)remain);
+          System.Int32 dup = newToOrig.Count;
+          newToOrig.Add(newToOrig[v]);
+          newHideKey.Add(one);
+          bitToVert[one] = dup;
+          report.VerticesSplit++;
+          remain &= ~one; }
+        splitClones.Add(bitToVert); }
+
+      /* One pass over every triangle, redirecting each index that belongs to a
+       * split vertex.  Safe to do after all clones exist. */
+      for (System.Int32 sm3 = 0; sm3 < subMeshCount; sm3++)
+      { System.Int32[] t3 = indices[sm3];
+        for (System.Int32 p3 = 0; p3 + 2 < t3.Length; p3 += 3)
+        { /* The triangle's AND-key names the single group that selects it. */
+          System.UInt64 triKey = newHideKey[t3[p3]] & newHideKey[t3[p3+1]] & newHideKey[t3[p3+2]];
+          for (System.Int32 k3 = 0; k3 < 3; k3++)
+          { System.Int32 vi = t3[p3+k3];
+            if (vi < 0 || vi >= splitClones.Count) continue;
+            System.Collections.Generic.Dictionary<System.UInt64,System.Int32> map = splitClones[vi];
+            if (map == null) continue;                 /* not a split vertex */
+            System.UInt64 own = splitFirstBit[vi];
+            if ((triKey & own) != 0) continue;         /* original is the right copy */
+            System.UInt64 hit = triKey & ~own;
+            if (hit == 0) continue;                    /* selected by no group */
+            System.UInt64 one = hit & (System.UInt64)(-(System.Int64)hit);
+            if (!map.TryGetValue(one,out System.Int32 target3)) continue;
+            t3[p3+k3] = target3; } } }
+
       /* ── 3. NEW MESH ──────────────────────────────────────────────── */
       UnityEngine.Mesh rebuilt = new UnityEngine.Mesh();
       rebuilt.name = mesh.name;
@@ -511,6 +584,7 @@ public static partial class Core
        * because a vertex with four real influences may need a fourth-candidate
        * bone before one of its slots can be donated. */
       System.Int32 nextBone = mesh.bindposes == null ? 0 : mesh.bindposes.Length;
+      System.Int32 firstNewBone = nextBone;
       for (System.Int32 gi = 0; gi < groups.Count; gi++)
       { Group g = groups[gi];
         if (g == null || g.vertices.Count == 0) continue;
@@ -533,6 +607,17 @@ public static partial class Core
             { UnityEngine.BoneWeight1 bw = extW[firstBoneNew[v] + b];
               if (bw.weight == 0f) continue;
               if (bw.boneIndex < 0) continue;
+              /* ONLY ORIGINAL BONES ARE VALID CANDIDATES.  A bone we created
+               * earlier in this same loop already sits at index >=
+               * firstNewBone, and selecting it would do two wrong things at
+               * once: the bind pose lookup would read a slot that still holds
+               * mesh-local garbage (or a pose we are about to overwrite), and
+               * the group's vertices would end up chained onto another group's
+               * bone instead of their own.  Measured symptom of allowing it:
+               * bind pose `(-0.0581, 0.3881, -0.0454)` against a live position
+               * of `(0.0546, -0.0067, 0.3912)` - not related by the rig's
+               * rotation, so the garment translated away from the body. */
+              if (bw.boneIndex >= firstNewBone) continue;
               freq.TryGetValue(bw.boneIndex,out System.Int32 n);
               freq[bw.boneIndex] = n + 1; } }
           if (freq.Count == 0)
@@ -550,6 +635,21 @@ public static partial class Core
           g.bones.Add(added);
           report.BonesCreated++;
 
+          /* MOVE, DO NOT SHARE.
+           *
+           * The first version repointed ONE influence at the new bone and left
+           * the vertex's other influences alone.  That is what produced the
+           * "drooping sleeve" corruption: a vertex then blends a FINITE rig
+           * influence with a NaN influence, and a linear blend of a real
+           * position with NaN is not NaN - the finite term drags the vertex part
+           * of the way, so the surface stretches into a spear instead of
+           * vanishing.  Measured on the test avatar: 5614 of 7649 vertices had
+           * mixed influences and the render showed exactly that stretching.
+           *
+           * A vertex can only be hidden by a bone if that bone is its WHOLE
+           * influence - NaN * 1 = NaN, but NaN * 0.3 + p * 0.7 is finite.  So
+           * the claimed influence is set to weight 1 and every other influence
+           * on that vertex is zeroed. */
           for (System.Int32 i = remaining.Count - 1; i >= 0; i--)
           { System.Int32 v = remaining[i];
             System.Boolean claimed = false;
@@ -557,32 +657,40 @@ public static partial class Core
             { System.Int32 at = firstBoneNew[v] + b;
               UnityEngine.BoneWeight1 bw = extW[at];
               if (bw.weight == 0f || bw.boneIndex != target) continue;
+
+              /* Zero every other slot FIRST, while the slot positions are still
+               * stable, then claim this one.  Writing as we scan would make a
+               * later slot's index depend on whether an earlier one was zeroed. */
+              for (System.Int32 k = 0; k < extB[v]; k++)
+              { System.Int32 kat = firstBoneNew[v] + k;
+                if (kat == at) continue;
+                UnityEngine.BoneWeight1 other = extW[kat];
+                other.weight = 0f;
+                other.boneIndex = 0;
+                extW[kat] = other; }
+
+              bw.weight = 1f;
               bw.boneIndex = added.newBoneIndex;
               extW[at] = bw;
               claimed = true;
               break; }
             if (claimed) remaining.RemoveAt(i); } } }
 
-      /* ── 5b. BIND POSES ───────────────────────────────────────────
+      /* ── 5b. BIND POSE ARRAY SIZE ─────────────────────────────────
        *
-       * A new bone needs its own bind pose or the vertices it just claimed
-       * collapse.  It INHERITS the original bone's pose, which is what keeps the
-       * geometry exactly where it was - the influence moved, the transform did
-       * not.  Resizing to `nextBone` also guarantees the array is never longer
-       * than the bones that use it, which is the mismatch that produced NaN
-       * vertices in the previous implementation. */
+       * Only the SIZE is settled here.  Bind poses describe where a bone sits
+       * in the REST pose, as `renderer.worldToLocalMatrix * bone.localToWorld`
+       * at author time.  A new bone hangs under the group's nanimation bone, so
+       * its truthful pose cannot be known until the GameObject exists - section
+       * 6 fills the matrix in.  Resizing to `nextBone` here also guarantees the
+       * array is never longer than the bones that use it, which is the mismatch
+       * that produced NaN vertices in the previous implementation. */
       UnityEngine.Matrix4x4[] poses = mesh.bindposes;
-      System.Int32 oldPoseCount = poses == null ? 0 : poses.Length;
+      /* Snapshot BEFORE the resize: `Array.Resize` may reuse the same backing
+       * store, so read the originals once here for section 6b to inherit. */
+      UnityEngine.Matrix4x4[] originalPoses = mesh.bindposes;
       System.Array.Resize(ref poses,nextBone);
-      for (System.Int32 gi = 0; gi < groups.Count; gi++)
-      { Group g = groups[gi];
-        if (g == null) continue;
-        for (System.Int32 b = 0; b < g.bones.Count; b++)
-        { AddedBone ab = g.bones[b];
-          poses[ab.newBoneIndex] = ab.originalBoneIndex >= 0 && ab.originalBoneIndex < oldPoseCount
-            ? mesh.bindposes[ab.originalBoneIndex]
-            : UnityEngine.Matrix4x4.identity; } }
-      rebuilt.bindposes = poses;
+      UnityEngine.Matrix4x4[] mesh_poses = poses;
       /* SetBoneWeights takes NativeArray, so the managed result is handed back
        * once here - see the note in section 4 for why the round trip is done
        * deliberately rather than threaded through the whole algorithm. */
@@ -657,13 +765,95 @@ public static partial class Core
             "__NZK_NanimBone_" + g.name + "_" + b);
           UnityEngine.Transform boneT = boneObj.transform;
           boneT.SetParent(buffer,false);
-          boneT.localPosition = UnityEngine.Vector3.zero;
-          boneT.localRotation = UnityEngine.Quaternion.identity;
-          boneT.localScale = UnityEngine.Vector3.one;
+
+          UnityEngine.Transform original =
+            ab.originalBoneIndex >= 0 && ab.originalBoneIndex < renderer.bones.Length
+              ? renderer.bones[ab.originalBoneIndex] : null;
+          if (original != null)
+          { /* PLACE THE BONE AT ITS OWN BIND POSE, SO THE SKIN MATRIX IS THE
+             * IDENTITY AND THE VERTEX DOES NOT MOVE.
+             *
+             * MEASURED, and this is the whole answer.  On this rig the live and
+             * bind transforms of one bone disagree by the rig's POSE, not by a
+             * fixed axis conversion.  Bone `vrc.Hand_L`:
+             *
+             *     live = (-0.4481,  0.0205,  1.0399)
+             *     bind = ( 0.1411, -0.2946, -1.0844)
+             *     live^-1 * bind = 2.2 m of translation
+             *
+             * Copying the live transform while inheriting the bind pose therefore
+             * reproduces the HAND'S deformation - and since this shape selects
+             * sleeve vertices, it dragged the jacket across 2.2 m.  Every
+             * earlier attempt at this was one half of that pair.
+             *
+             * A skin matrix is `bone.worldToLocal * bindpose`.  To leave a vertex
+             * exactly where it is, the product must be the IDENTITY, which needs
+             * the bone's live transform to BE the transform its bind pose
+             * describes:
+             *
+             *     boneWorld = renderer.localToWorldMatrix * bindpose[original]
+             *
+             * So the bone is placed THERE, and section 6b gives it exactly that
+             * bind pose.  The pair then cancels, the rest pose is untouched, and
+             * the only thing that ever moves these vertices is the NaN scale the
+             * clip drives through the buffer above. */
+            UnityEngine.Matrix4x4 wantWorld = renderer.localToWorldMatrix * originalPoses[ab.originalBoneIndex];
+            UnityEngine.Vector3 wantPos = wantWorld.GetColumn(3);
+            UnityEngine.Quaternion wantRot = wantWorld.rotation;
+            UnityEngine.Vector3 wantScale = wantWorld.lossyScale;
+            boneT.SetPositionAndRotation(wantPos, wantRot);
+            for (System.Int32 pass = 0; pass < 3; pass++)
+            { UnityEngine.Vector3 have = boneT.lossyScale;
+              if (have.x == 0f || have.y == 0f || have.z == 0f) break;
+              UnityEngine.Vector3 cur = boneT.localScale;
+              boneT.localScale = new UnityEngine.Vector3(
+                cur.x * wantScale.x / have.x,
+                cur.y * wantScale.y / have.y,
+                cur.z * wantScale.z / have.z); } }
+          else
+          { boneT.localPosition = UnityEngine.Vector3.zero;
+            boneT.localRotation = UnityEngine.Quaternion.identity;
+            boneT.localScale = UnityEngine.Vector3.one; }
 
           newBones[ab.newBoneIndex] = boneT;
           created.Add(boneObj); }
         if (created.Count > 0) result[g.name] = created; }
+
+      /* ── 6b. BIND POSES FROM THE PLACEMENT ABOVE ──────────────────
+       *
+       * Derived, never inherited.  `bindposes[i]` is where bone `i` sat in the
+       * rest pose, expressed in the renderer's local space, and a skin matrix
+       * is `bone.worldToLocal * bindposes[i]`.  That product is the identity
+       * only when the bind pose describes the transform the bone actually has,
+       * so the pose is READ OFF the transform that was just set rather than
+       * copied from the original bone.  Copying the original's pose while the
+       * new bone stood somewhere else is precisely the 0.79 m disagreement
+       * measured earlier (bone at origin, pose claiming the far end of a leg),
+       * and it is what speared the garments.
+       *
+       * ASSIGNING THE ORIGINAL'S POSE IS THEREFORE ONLY SAFE IF THE BONE IS
+       * ALSO PLACED AT THE ORIGINAL'S WORLD TRANSFORM, which section 6 does.
+       * The two are computed from the same source, so they cannot disagree. */
+      for (System.Int32 gi = 0; gi < groups.Count; gi++)
+      { Group g = groups[gi];
+        if (g == null) continue;
+        for (System.Int32 b = 0; b < g.bones.Count; b++)
+        { AddedBone ab = g.bones[b];
+          if (ab.newBoneIndex < 0 || ab.newBoneIndex >= mesh_poses.Length) continue;
+          UnityEngine.Transform t = newBones[ab.newBoneIndex];
+          if (t == null) { mesh_poses[ab.newBoneIndex] = UnityEngine.Matrix4x4.identity; continue; }
+          /* DERIVED FROM THE PLACEMENT, so `live^-1 * bind` cancels to the
+           * identity and the claimed vertices stay exactly where they are.
+           *
+           * Section 6 put this bone at `renderer.localToWorld * bindpose[orig]`,
+           * so reading the pose back off it reproduces that same matrix and the
+           * two cancel.  Inheriting the original's pose instead is only
+           * equivalent when the placement matched the original's LIVE transform,
+           * which on a posed rig it does not (measured: `vrc.Hand_L` live
+           * `(-0.4481, 0.0205, 1.0399)` vs bind `(0.1411, -0.2946, -1.0844)`,
+           * a 2.2 m skin translation that dragged the jacket with it). */
+          mesh_poses[ab.newBoneIndex] = renderer.worldToLocalMatrix * t.localToWorldMatrix; } }
+      rebuilt.bindposes = mesh_poses;
 
       renderer.bones = newBones;
       renderer.sharedMesh = rebuilt;
