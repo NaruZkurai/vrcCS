@@ -63,6 +63,46 @@ public static partial class MA {
      *  REPORTED, not silently dropped - a garment that does not toggle because
      *  its bone is named differently is exactly the silent failure this whole
      *  investigation was about.</summary> */
+    /** <summary>Apply the nanimation surgery to EVERY renderer under a root.
+     *
+     *  WHY THIS MUST EXIST.  A garment is not one renderer.  Measured on the test
+     *  avatar, the stockings are THREE:
+     *
+     *      Stockings                 7354 v  15 shapes
+     *      VShoes - Stockings        7354 v  15 shapes   <- same mesh, other object
+     *      VShoes - Stockings metal  1658 v  14 shapes
+     *
+     *  `Stockings` and `VShoes - Stockings` are the same geometry on two objects.
+     *  Processing one and not the other leaves the garment half-processed: the
+     *  processed copy hides on its toggle and the untouched copy does not, so a
+     *  strip of the garment stays on screen - the "boot cuff that will not
+     *  disappear".  Every renderer that carries the shape has to be covered for a
+     *  toggle to actually remove the garment.
+     *
+     *  Renderers with no blendshapes, or whose shapes match no bone, are reported
+     *  rather than skipped silently.</summary> */
+    public static Report ApplyFromBlendShapes(
+      UnityEngine.GameObject root,
+      UnityEngine.Transform nanimationGroup)
+    { Report total = new Report();
+      if (root == null) { total.error = "root is null"; return total; }
+      UnityEngine.SkinnedMeshRenderer[] all =
+        root.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+      for (System.Int32 i = 0; i < all.Length; i++)
+      { Report one = ApplyFromBlendShapes(all[i],nanimationGroup);
+        /* COUNT, do not overwrite: the report describes the whole pass. */
+        total.MeshesInspected += one.MeshesInspected;
+        total.MeshesRebuilt += one.MeshesRebuilt;
+        total.VerticesSplit += one.VerticesSplit;
+        total.BonesCreated += one.BonesCreated;
+        total.BuffersCreated += one.BuffersCreated;
+        total.MeshesSkipped += one.MeshesSkipped;
+        if (!NZK.B.NoE(one.error))
+          total.error = (NZK.B.NoE(total.error) ? "" : total.error + " | ") +
+                        all[i].name + ": " + one.error; }
+      return total; }
+    /** <summary>Single-renderer entry point.  See the root overload for why the
+     *  avatar-wide one is the correct caller.</summary> */
     public static Report ApplyFromBlendShapes(
       UnityEngine.SkinnedMeshRenderer renderer,
       UnityEngine.Transform nanimationGroup)
@@ -154,10 +194,25 @@ public static partial class MA {
         if (g.vertices.Count == 0) continue;
         groups.Add(g); }
       if (groups.Count == 0)
-      { report.MeshesSkipped = 1;
+      { /* NO GROUP IS THE NORMAL CASE FOR MOST MESHES.  Measured on the test
+         * avatar: 27 renderers, and only 13 carry a garment shape.  The rest are
+         * the body, face and hair, whose shapes are all face morphs
+         * (`vrc.v_aa`, `Blink`, `JawOpen`, ...).  Reporting those as an error
+         * produced a 170-name message per body mesh and made the real failures
+         * unreadable, so a plain skip is recorded and the names are kept to a
+         * short sample.
+         *
+         * NOT silent: when a mesh HAS a shape whose name is only a prefix or a
+         * near-miss of a bone, that is the hidden failure this whole
+         * investigation was about, so the first few names are still surfaced. */
+        report.MeshesSkipped = 1;
         if (unmatched.Count > 0)
-          report.error = "no blendshape matched a bone under '" + nanimationGroup.name +
-                         "'. Unmatched: " + System.String.Join(", ",unmatched.ToArray());
+        { const System.Int32 MaxNames = 6;
+          System.Int32 take = unmatched.Count < MaxNames ? unmatched.Count : MaxNames;
+          System.String sample = System.String.Join(", ",unmatched.GetRange(0,take).ToArray());
+          if (unmatched.Count > take) sample += " (+" + (unmatched.Count - take) + " more)";
+          report.error = "no shape matched a bone under '" + nanimationGroup.name +
+                         "'; skipped. Sample: " + sample; }
         return report; }
       /* Call Rebuild DIRECTLY, passing this report by ref.  Going through
        * `Apply` would start a fresh Report and lose the shaping counts gathered
