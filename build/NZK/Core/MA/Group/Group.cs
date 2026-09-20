@@ -20,6 +20,10 @@ public sealed class Group
        *  bone: that bone is an ordinary rig bone (Hips, Spine, a toe), and
        *  renaming or re-owning it corrupts the rig. */
       public UnityEngine.Transform nanimationBone;
+      /** The ONE influence bone this group produced (section 6).  Multiple
+       *  allocations are folded onto it, so a group maps to a single bone at
+       *  weight 1 rather than a chain. */
+      public UnityEngine.Transform influenceBone;
     }
 }
 }

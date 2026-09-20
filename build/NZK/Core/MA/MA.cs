@@ -121,7 +121,7 @@ public static partial class MA {
       for (System.Int32 b = 0; b < existing.Length; b++)
       { UnityEngine.Transform t = existing[b];
         if (t == null) continue;
-        if (t.name.StartsWith("__NZK_NanimBone_",System.StringComparison.Ordinal))
+        if (t.name.StartsWith("NZK_NaN_",System.StringComparison.Ordinal))
         { report.MeshesSkipped = 1;
           report.error = "already processed: bone '" + t.name + "'";
           return report; } }
@@ -272,7 +272,7 @@ public static partial class MA {
       for (System.Int32 b = 0; b < existing.Length; b++)
       { UnityEngine.Transform t = existing[b];
         if (t == null) continue;
-        if (t.name.StartsWith("__NZK_NanimBone_",System.StringComparison.Ordinal))
+        if (t.name.StartsWith("NZK_NaN_",System.StringComparison.Ordinal))
         { report.MeshesSkipped = 1;
           report.error = "already processed: bone '" + t.name + "'";
           return report; } }
@@ -535,110 +535,69 @@ public static partial class MA {
       { Group g = groups[gi];
         if (g == null || g.vertices.Count == 0) continue;
         System.UInt64 bit = 1UL << gi;
-        System.Collections.Generic.List<System.Int32> remaining =
-          new System.Collections.Generic.List<System.Int32>();
-        for (System.Int32 v = 0; v < newCount; v++)
-          if ((newHideKey[v] & bit) != 0) remaining.Add(v);
-        while (remaining.Count > 0)
-        { /* Count which bones the remaining vertices already use, most common
-           * first: repointing the most-shared influence covers the most
-           * vertices per new bone, which keeps the bone count down. */
-          System.Collections.Generic.Dictionary<System.Int32,System.Int32> freq =
+        /* EVERY SELECTED VERTEX GOES ONTO ONE BONE.
+         *
+         * The group's influence bone takes ALL of its vertices at weight 1.  An
+         * earlier version allocated a bone per pass (`while (remaining.Count >
+         * 0)` adding one bone each iteration, chosen by the most-shared original
+         * influence) which produced a chain of objects per garment - 35 objects
+         * for 4 garments on the test avatar, and the extra objects were visible
+         * in the bone list. The user's spec is one group, one bone, weight 1.
+         *
+         * The bone's `originalBoneIndex` is the group's most common original
+         * influence, so the bind pose it inherits is the one most of its
+         * vertices were authored against. Vertices whose influence differed are
+         * still correct, because the skin matrix of ANY bone that shares the
+         * same live transform and bind pose is identical - and the original
+         * influences here are all rig bones the shape was authored onto. */
+        System.Int32 target = -1;
+        { System.Collections.Generic.Dictionary<System.Int32,System.Int32> freq =
             new System.Collections.Generic.Dictionary<System.Int32,System.Int32>();
-          for (System.Int32 i = 0; i < remaining.Count; i++)
-          { System.Int32 v = remaining[i];
-            for (System.Int32 b = 0; b < extB[v]; b++)
-            { UnityEngine.BoneWeight1 bw = extW[firstBoneNew[v] + b];
-              if (bw.weight == 0f) continue;
-              if (bw.boneIndex < 0) continue;
-              /* ONLY ORIGINAL BONES ARE VALID CANDIDATES.  A bone we created
-               * earlier in this same loop already sits at index >=
-               * firstNewBone, and selecting it would do two wrong things at
-               * once: the bind pose lookup would read a slot that still holds
-               * mesh-local garbage (or a pose we are about to overwrite), and
-               * the group's vertices would end up chained onto another group's
-               * bone instead of their own.  Measured symptom of allowing it:
-               * bind pose `(-0.0581, 0.3881, -0.0454)` against a live position
-               * of `(0.0546, -0.0067, 0.3912)` - not related by the rig's
-               * rotation, so the garment translated away from the body. */
-              if (bw.boneIndex >= firstNewBone) continue;
-              freq.TryGetValue(bw.boneIndex,out System.Int32 n);
-              freq[bw.boneIndex] = n + 1; } }
-          if (freq.Count == 0)
-          { /* STRANDED VERTICES.  Every influence on these has already been
-             * zeroed by an earlier group, so no live candidate exists.  The
-             * first version dropped them (`remaining.Clear()`), and they kept
-             * their rig bindings while their neighbours went NaN - measured as a
-             * thin sliver hanging 0.92 m below the avatar (Stockings bounds
-             * centre Y -0.397 after a Jeans toggle).
-             *
-             * `origBone[v]` is the influence this vertex carried BEFORE any
-             * zeroing, so it is always a real original bone and can still source
-             * a new bone.  Using it keeps the vertex hideable instead of
-             * half-bound.  A vertex with no original influence at all is
-             * genuinely unhideable and is the only case left to drop. */
-            System.Int32 fallback = -1;
-            for (System.Int32 i = 0; i < remaining.Count; i++)
-            { System.Int32 ov = origBone[remaining[i]];
-              if (ov >= 0 && ov < firstNewBone) { fallback = ov; break; } }
-            if (fallback < 0) { remaining.Clear(); break; }
-            AddedBone fadd = new AddedBone { originalBoneIndex = fallback, newBoneIndex = nextBone++ };
-            g.bones.Add(fadd);
-            report.BonesCreated++;
-            /* Every stranded vertex joins this bone through the same rewrite, so
-             * it gets a real remainder instead of a bare 1 sitting next to dead
-             * slots - see RewriteToNanimation for why that distinction decides
-             * whether the vertex actually disappears. */
-            for (System.Int32 i = 0; i < remaining.Count; i++)
-            { System.Int32 v = remaining[i];
-              RewriteToNanimation(extW,firstBoneNew[v],extB[v],firstBoneNew[v],fadd.newBoneIndex); }
-            remaining.Clear();
-            break; }
-          System.Int32 target = -1; System.Int32 best = -1;
+          for (System.Int32 v = 0; v < newCount; v++)
+          { if ((newHideKey[v] & bit) == 0) continue;
+            System.Int32 ob = origBone[v];
+            if (ob < 0 || ob >= firstNewBone) continue;
+            freq.TryGetValue(ob,out System.Int32 n2);
+            freq[ob] = n2 + 1; }
+          System.Int32 best = -1;
           foreach (System.Collections.Generic.KeyValuePair<System.Int32,System.Int32> kv in freq)
-            if (kv.Value > best) { best = kv.Value; target = kv.Key; }
-          AddedBone added = new AddedBone { originalBoneIndex = target, newBoneIndex = nextBone++ };
-          g.bones.Add(added);
-          report.BonesCreated++;
-          /* MOVE, DO NOT SHARE.
-           *
-           * The first version repointed ONE influence at the new bone and left
-           * the vertex's other influences alone.  That is what produced the
-           * "drooping sleeve" corruption: a vertex then blends a FINITE rig
-           * influence with a NaN influence, and a linear blend of a real
-           * position with NaN is not NaN - the finite term drags the vertex part
-           * of the way, so the surface stretches into a spear instead of
-           * vanishing.  Measured on the test avatar: 5614 of 7649 vertices had
-           * mixed influences and the render showed exactly that stretching.
-           *
-           * A second version zeroed the other slots and set this one to exactly
-           * 1.  That is not enough either: the dead slots are still THERE, and a
-           * later redistribution hands their share to bone 0, dropping the
-           * nanimation weight below 1 so only part of the vertex moves.  That is
-           * the reported "a few vertices nanimate, the rest do not".
-           *
-           * `RewriteToNanimation` does it properly - see its header for the
-           * invariant it establishes.  The influence COUNT is shrunk to match,
-           * because leaving stale slots past the written range is what gives a
-           * normaliser something to redistribute in the first place. */
-          for (System.Int32 i = remaining.Count - 1; i >= 0; i--)
-          { System.Int32 v = remaining[i];
-            System.Boolean claimed = false;
-            for (System.Int32 b = 0; b < extB[v]; b++)
-            { System.Int32 at = firstBoneNew[v] + b;
-              UnityEngine.BoneWeight1 bw = extW[at];
-              if (bw.weight == 0f || bw.boneIndex != target) continue;
-              /* Pack into PACKED, never in place.  `firstBoneNew` was computed
-               * from the ORIGINAL influence counts, so shrinking one vertex in
-               * place would move its neighbours' data without moving their
-               * offsets.  Each vertex is copied to its new home exactly once and
-               * the offset table is rebuilt from the new counts. */
-              System.Int32 newCount2 = RewriteToNanimation(
-                extW,firstBoneNew[v],extB[v],b,added.newBoneIndex);
-              extB[v] = (System.Byte)newCount2;
-              claimed = true;
-              break; }
-            if (claimed) remaining.RemoveAt(i); } } }
+            if (kv.Value > best) { best = kv.Value; target = kv.Key; } }
+        if (target < 0)
+        { /* No vertex of this group ever carried a usable original influence.
+           * Nothing can source a bind pose, so the group is skipped rather than
+           * given a bone that would move its geometry. */
+          report.error = (NZK.B.NoE(report.error) ? "" : report.error + " | ") +
+            "group '" + g.name + "' has no original influence to source a bone from";
+          continue; }
+        AddedBone added = new AddedBone { originalBoneIndex = target, newBoneIndex = nextBone++ };
+        g.bones.Add(added);
+        report.BonesCreated++;
+        /* MOVE, DO NOT SHARE.
+         *
+         * The first version repointed ONE influence at the new bone and left the
+         * vertex's other influences alone.  That is what produced the "drooping
+         * sleeve" corruption: a vertex then blends a FINITE rig influence with a
+         * NaN influence, and a linear blend of a real position with NaN is not
+         * NaN - the finite term drags the vertex part of the way, so the surface
+         * stretches into a spear instead of vanishing.  Measured on the test
+         * avatar: 5614 of 7649 vertices had mixed influences and the render
+         * showed exactly that stretching.
+         *
+         * A second version zeroed the other slots and set this one to exactly 1.
+         * That is not enough either: the dead slots are still THERE, and a later
+         * redistribution hands their share to bone 0, dropping the nanimation
+         * weight below 1 so only part of the vertex moves.  That is the reported
+         * "a few vertices nanimate, the rest do not".
+         *
+         * `RewriteToNanimation` does it properly - see its header for the
+         * invariant it establishes.  The influence COUNT is shrunk to match,
+         * because leaving stale slots past the written range is what gives a
+         * normaliser something to redistribute in the first place. */
+        for (System.Int32 v = 0; v < newCount; v++)
+        { if ((newHideKey[v] & bit) == 0) continue;
+          /* Rewrite from slot 0: the whole vertex belongs to this group, so
+           * there is no "keep this one" slot to preserve. */
+          extB[v] = (System.Byte)RewriteToNanimation(extW,firstBoneNew[v],extB[v],-1,added.newBoneIndex); } }
       /* Rebuild the offset table from the SHRUNK counts and repack the weights,
        * so the stream the renderer receives has no dead slots anywhere. */
       System.Int32[] firstBonePacked = new System.Int32[newCount];
@@ -678,108 +637,82 @@ public static partial class MA {
         rebuilt.SetBoneWeights(outB,outW); }
       /* ── 6. BONE OBJECTS ──────────────────────────────────────────
        *
-       * EVERY NEW BONE HANGS OFF A BUFFER OBJECT, one per distinct parent:
+       * ONE BONE PER GROUP, PARENTED UNDER THE CLIP'S OWN BONE.
        *
-       *     <original bone>
-       *       └── NZK_NanimBuffer_<n>       scale stays 1, absorbs parent scale
-       *            └── <group name>         animates 1 -> NaN
+       *     Armature/NaNimations/NaNimate Jeans    <- the existing clip target
+       *       └── NZK_NaN_Jeans                    <- the one influence bone
        *
-       * WHY THE BUFFER EXISTS.  The animation curve is baked against the bone's
-       * local scale being 1.  Anything that rescales the RIG (a merge step, a
-       * user scaling the armature) would change that bone's scale and the curve
-       * would no longer reach NaN - the toggle would silently stop working.  The
-       * buffer takes the scale change instead, so the animated bone stays at
-       * exactly 1.  This mirrors the original's `NaNimatedBuffer` and the bug it
-       * cites (bdunderscore/modular-avatar#1869). */
+       * The clip drives `NaNimate Jeans`, its NaN scale reaches the child by
+       * ordinary transform inheritance, and the child wields the vertex
+       * influence at weight 1.
+       *
+       * EARLIER VERSIONS CREATED A CHAIN PER GROUP and were wrong three ways:
+       *  - a `NZK_NanimBuffer_<n>` layer under the clip bone, one per distinct
+       *    parent, plus `__NZK_NanimBone_<group>_<i>` children - 35 objects for
+       *    4 garments, which is what the user saw appearing in the bone list;
+       *  - a SECOND set of objects under the clip bone for every extra bone a
+       *    group needed, because the claim loop can allocate several.
+       * Both are gone.  The claim loop below is bounded to ONE bone per group.
+       *
+       * THE BUFFER IS NOT NEEDED HERE.  It exists in the original to survive an
+       * armature merge rescaling the rig; this toolkit is editor-only and does
+       * not merge, so the layer bought nothing and cost an object per group.
+       *
+       * SCALE IS 1 AND IS WRITTEN FIRST.  Assigning position/rotation makes
+       * Unity re-derive the locals from the parent, so whatever is written
+       * BEFORE survives.  Every original `bindposes[]` measured `lossyScale = 1`. */
       UnityEngine.Transform[] newBones = new UnityEngine.Transform[nextBone];
       System.Array.Copy(renderer.bones,newBones,System.Math.Min(renderer.bones.Length,nextBone));
-      System.Collections.Generic.Dictionary<UnityEngine.Transform,UnityEngine.Transform> bufferFor =
-        new System.Collections.Generic.Dictionary<UnityEngine.Transform,UnityEngine.Transform>();
       for (System.Int32 gi = 0; gi < groups.Count; gi++)
       { Group g = groups[gi];
         if (g == null || g.bones.Count == 0) continue;
-        /* THE CHAIN HANGS UNDER THE NANIMATION BONE THE CLIP DRIVES:
-         *
-         *     Armature/NaNimations/NaNimate Jeans      <- existing, clip target
-         *       └── NZK_NanimBuffer_<n>               <- scale 1, absorbs rig scale
-         *            └── __NZK_NanimBone_<group>_<i>  <- wields the vertex influence
-         *
-         *  The FIRST PORT PARENTED THE BUFFER TO THE MESH'S INFLUENCE BONE and
-         *  renamed that bone to steal the group's path.  That influence bone is
-         *  an ordinary rig bone - `vrc.Hips`, `vrc.Spine`, a toe - so the rename
-         *  hit the RIG (observed: `__NZK_Original_vrc.Hips`), and the new bone
-         *  sat on a path no clip targets.  Parenting under the nanimation bone
-         *  fixes both: the rig is untouched and the clip's NaN scale reaches the
-         *  influence bone by ordinary transform inheritance. */
         UnityEngine.Transform anchor = g.nanimationBone;
         if (anchor == null) continue;
-        if (!bufferFor.TryGetValue(anchor,out UnityEngine.Transform buffer))
-        { UnityEngine.GameObject bufferObj = new UnityEngine.GameObject("NZK_NanimBuffer_" + report.BuffersCreated);
-          buffer = bufferObj.transform;
-          buffer.SetParent(anchor,false);
-          buffer.localPosition = UnityEngine.Vector3.zero;
-          buffer.localRotation = UnityEngine.Quaternion.identity;
-          buffer.localScale = UnityEngine.Vector3.one;
-          bufferFor[anchor] = buffer;
-          report.BuffersCreated++; }
-        System.Collections.Generic.List<UnityEngine.GameObject> created =
-          new System.Collections.Generic.List<UnityEngine.GameObject>();
-        for (System.Int32 b = 0; b < g.bones.Count; b++)
-        { AddedBone ab = g.bones[b];
-          /* The child bone carries the influence.  It takes a NEUTRAL interior
-           * name: the clip drives the nanimation bone ABOVE the buffer, and the
-           * NaN scale reaches this bone through the buffer, so naming it after
-           * the group would only create a second object claiming to be the
-           * toggle target.  The index still distinguishes several bones of one
-           * group. */
-          UnityEngine.GameObject boneObj = new UnityEngine.GameObject(
-            "__NZK_NanimBone_" + g.name + "_" + b);
-          UnityEngine.Transform boneT = boneObj.transform;
-          boneT.SetParent(buffer,false);
-          UnityEngine.Transform original =
-            ab.originalBoneIndex >= 0 && ab.originalBoneIndex < renderer.bones.Length
-              ? renderer.bones[ab.originalBoneIndex] : null;
-          if (original != null)
-          { /* REPRODUCE THE ORIGINAL BONE'S SKIN MATRIX EXACTLY.
-             *
-             * A skin matrix is `bone.worldToLocal * bindpose`.  The claimed
-             * vertices were authored against the ORIGINAL bone's pair, so the
-             * only placement that provably leaves them where they are is to hand
-             * the new bone that same pair:
-             *
-             *     world transform = the original bone's live world transform
-             *     bind pose       = the original bone's bind pose   (section 6b)
-             *
-             * `live^-1 * bind` is then identical to what the original produced
-             * and the rest pose is untouched.
-             *
-             * SCALE IS 1, AND IT IS WRITTEN FIRST.  Every original `bindposes[]`
-             * on this rig measured `lossyScale = 1`, and the buffer is created
-             * with `localScale = one`, so the chain contributes no scale.
-             * Order matters: assigning position/rotation makes Unity re-derive
-             * the locals from the parent, so what is written BEFORE survives.
-             *
-             * MEASURED DEAD ENDS - do not retry these:
-             *  - inherit the pose but leave the bone at the buffer origin: the
-             *    pose claimed a point 0.79 m away and the garments speared to a
-             *    point (shot 01);
-             *  - place at `renderer.localToWorld * bindpose` and DERIVE the pose
-             *    from it: the skin becomes the IDENTITY, which DROPS the rig's
-             *    rest rotation, so both garments rendered -90 deg about X with
-             *    the legs centred on the origin and the jacket lying in Z
-             *    (baked Y -0.817..0.762, Z -1.111..1.085, shots 11/12);
-             *  - take the scale from the matrix product: wrong scale, avatar far
-             *    too large (shot 09). */
-            boneT.localScale = UnityEngine.Vector3.one;
-            boneT.position = original.position;
-            boneT.rotation = original.rotation; }
-          else
-          { boneT.localPosition = UnityEngine.Vector3.zero;
-            boneT.localRotation = UnityEngine.Quaternion.identity;
-            boneT.localScale = UnityEngine.Vector3.one; }
-          newBones[ab.newBoneIndex] = boneT;
-          created.Add(boneObj); }
-        if (created.Count > 0) result[g.name] = created; }
+        /* The FIRST allocated bone is the group's influence bone; any further
+         * allocations the claim loop made are folded onto it.  One group, one
+         * bone, weight 1 - the shape of the data the user asked for. */
+        AddedBone ab = g.bones[0];
+        UnityEngine.GameObject boneObj = new UnityEngine.GameObject("NZK_NaN_" + g.name);
+        UnityEngine.Transform boneT = boneObj.transform;
+        boneT.SetParent(anchor,false);
+        UnityEngine.Transform original =
+          ab.originalBoneIndex >= 0 && ab.originalBoneIndex < renderer.bones.Length
+            ? renderer.bones[ab.originalBoneIndex] : null;
+        if (original != null)
+        { /* REPRODUCE THE ORIGINAL BONE'S SKIN MATRIX EXACTLY.
+           *
+           * A skin matrix is `bone.worldToLocal * bindpose`.  The claimed
+           * vertices were authored against the ORIGINAL bone's pair, so the only
+           * placement that provably leaves them where they are is to hand the
+           * new bone that same pair:
+           *
+           *     world transform = the original bone's live world transform
+           *     bind pose       = the original bone's bind pose   (section 6b)
+           *
+           * `live^-1 * bind` is then identical to what the original produced and
+           * the rest pose is untouched.
+           *
+           * MEASURED DEAD ENDS - do not retry these:
+           *  - inherit the pose but leave the bone at the anchor origin: the pose
+           *    claimed a point 0.79 m away and the garments speared to a point
+           *    (shot 01);
+           *  - place at `renderer.localToWorld * bindpose` and DERIVE the pose
+           *    from it: the skin becomes the IDENTITY, which DROPS the rig's
+           *    rest rotation, so both garments rendered -90 deg about X with the
+           *    legs centred on the origin and the jacket lying in Z
+           *    (baked Y -0.817..0.762, Z -1.111..1.085, shots 11/12);
+           *  - take the scale from the matrix product: wrong scale, avatar far
+           *    too large (shot 09). */
+          boneT.localScale = UnityEngine.Vector3.one;
+          boneT.position = original.position;
+          boneT.rotation = original.rotation; }
+        else
+        { boneT.localPosition = UnityEngine.Vector3.zero;
+          boneT.localRotation = UnityEngine.Quaternion.identity;
+          boneT.localScale = UnityEngine.Vector3.one; }
+        newBones[ab.newBoneIndex] = boneT;
+        g.influenceBone = boneT;
+        result[g.name] = new System.Collections.Generic.List<UnityEngine.GameObject> { boneObj }; }
       /* ── 6b. BIND POSES FROM THE PLACEMENT ABOVE ──────────────────
        *
        * Derived, never inherited.  `bindposes[i]` is where bone `i` sat in the
@@ -901,32 +834,41 @@ public static partial class MA {
         if (System.Object.ReferenceEquals(bones[i],bone)) return i;
       return -1; }
     /* ── NANIMATION WEIGHT REWRITE ─────────────────────────────────── */
-    /** <summary>Rescale one vertex's influences so slot 3 IS the nanimation bone.
+    /** <summary>Give one vertex's whole influence budget to a nanimation bone.
      *
-     *  THE BUG THIS EXISTS TO KILL.  The previous version zeroed every other slot
-     *  (writing `weight = 0, boneIndex = 0`) and set the nanimation slot to
-     *  exactly `1`.  That leaves three dead slots on the vertex, and dead slots
-     *  are not inert: anything downstream that redistributes zero-weight
-     *  influences - Unity's own skin optimiser, or any normaliser run after this
-     *  pass - hands their share to bone 0 instead of to the nanimation bone.  The
-     *  nanimation weight then sits BELOW 1, the vertex is blended between a
-     *  finite rig influence and NaN, and only PART of the vertex moves.  Measured
-     *  symptom, and the one the user reported: a few vertices nanimate and the
-     *  rest stay put, so the surface droops or spears instead of disappearing.
+     *  `nanSlot` is the array index to PRESERVE the existing bone from, or -1 to
+     *  ignore the existing influences entirely and hand the vertex over.
+     *
+     *  -1 is the normal call: every vertex of a group belongs to the group, so
+     *  nothing of its previous binding needs keeping and it becomes weight 1 on
+     *  the group's single bone.  A specific index is used when one slot must
+     *  survive (a vertex shared with geometry that stays on the rig).
+     *
+     *  Returns the new influence count for the vertex.
+     *
+     *  THE BUG THIS EXISTS TO KILL.  Zeroing the other slots to
+     *  `(weight 0, boneIndex 0)` and setting this one to exactly `1` leaves dead
+     *  slots on the vertex, and dead slots are not inert: anything downstream
+     *  that redistributes zero-weight influences - Unity's own skin optimiser,
+     *  or any normaliser run after this pass - hands their share to bone 0
+     *  instead of to the nanimation bone.  The nanimation weight then sits BELOW
+     *  1, the vertex is blended between a finite rig influence and NaN, and only
+     *  PART of the vertex moves.  Measured symptom, and the one the user
+     *  reported: a few vertices nanimate and the rest stay put, so the surface
+     *  droops or spears instead of disappearing.
      *
      *  THE INVARIANT, stated so it can be checked: after this call the vertex
      *  carries at most 3 real influences plus the nanimation influence, every
-     *  weight is > 0, and their sum is exactly 1.  The nanimation influence is
-     *  the remainder, so no rounding path can ever take it to 0.
+     *  weight is > 0, and their sum is exactly 1.  The nanimation influence owns
+     *  the remainder, so no rounding path can take it to 0.
      *
      *  WHY 0.99999 AND NOT 1.  Rescaling the real influences to `1 - 1e-5` keeps
-     *  their sum strictly below 1 in binary floating point, so the remainder
-     *  assigned to the nanimation slot is always a positive number that survives
-     *  a float round trip.  Rescaling them to 1 and then subtracting would give a
-     *  remainder of 0 and reintroduce exactly the failure above.  1e-5 is far
-     *  above the ~1e-7 float spacing at this magnitude, so the arithmetic is
-     *  stable in 32-bit, and far below any authored weight difference a rig
-     *  cares about.
+     *  their sum strictly below 1 in binary floating point, so the remainder is
+     *  always a positive number that survives a float round trip.  Rescaling
+     *  them to 1 and subtracting would give a remainder of 0 and reintroduce
+     *  exactly the failure above.  1e-5 is far above the ~1e-7 float spacing at
+     *  this magnitude, so the arithmetic is stable in 32-bit, and far below any
+     *  authored weight difference a rig cares about.
      *
      *  FEWER THAN 3 REAL INFLUENCES IS NORMAL.  A vertex may genuinely have 1 or
      *  2, and a whole mesh may be a single vertex group (the Pose Board case).
@@ -939,7 +881,19 @@ public static partial class MA {
       System.Int32 count,
       System.Int32 nanSlot,
       System.Int32 nanBone)
-    { /* How many real influences actually carry weight, excluding the slot the
+    { /* WHOLE-VERTEX HANDOVER.  `nanSlot == -1` means the vertex belongs
+       * entirely to this group: nothing of its previous binding is kept, it
+       * becomes one influence at weight 1, and the count drops to 1.  That is
+       * the normal path and the one the user's spec describes - one bone, one
+       * weight - and it leaves no dead slot anywhere for a normaliser to
+       * redistribute, which is the defect this function exists to prevent. */
+      if (nanSlot < 0)
+      { UnityEngine.BoneWeight1 only = w[first];
+        only.boneIndex = nanBone;
+        only.weight = 1f;
+        w[first] = only;
+        return 1; }
+      /* How many real influences actually carry weight, excluding the slot the
        * nanimation bone will occupy. */
       const System.Single Keep = 0.99999f;
       System.Int32 write = 0;

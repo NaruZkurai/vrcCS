@@ -1,0 +1,834 @@
+#if UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core {
+public static partial class NZKNaNimateWeightNormalizer {
+    /*
+     * Rewrites bone weights so that any bone matching a NaNimate pattern holds
+     * exactly NaNimateWeight for every vertex that touches it,
+     * with all remaining influences rescaled so their total is still 1.
+     *
+     * WHY: Unity's importer drops influences below minBoneWeight, and a
+     * NaNimate group is by definition a near-zero influence. Pinning it to a
+     * tiny known value keeps the bone bound without letting it deform the mesh.
+     *
+     * MATH, per affected vertex. Let N be all NaNimate influences at this
+     * vertex and O_i the ordinary ones:
+     *
+     * w_nanimate' = epsilon                  (exactly 1e-07)
+     * w_i'        = O_i * (1 - epsilon) / sum(O)
+     *
+     * The ordinary influences keep their RELATIVE proportions and absorb the
+     * remainder exactly, so sum(w') == 1. That is what makes it a perfect
+     * mesh: the authored distribution is preserved, nothing merely truncated.
+     *
+     * No using directives by design - every type is fully qualified.
+     */
+    /*
+     * The canonical NaNimate weight, 1e-07 (0.0000001). Kept as the named
+     * default so callers and logs reference one constant. The live value is
+     * PinValue.
+     */
+    public const float NaNimateWeight=1e-07f;
+    /* Substring marking a bone as a NaNimate group (case-insensitive). */
+    public const string NaNimatePattern="nanimate";
+    /*
+     * Only an exactly-zero ordinary sum counts as "no ordinary influence".
+     *
+     * Deliberately NOT a small epsilon: a weight of 1e-30 is still a real
+     * authored value, and classifying it as empty would leave the vertex
+     * summing to the pin alone instead of 1. The only case that genuinely
+     * cannot reach 1 is every ordinary weight being exactly 0.
+     */
+    const float EmptyThreshold=0f;
+    /* Lowest and highest weights reachable by PinValue. */
+    public const float MinPinValue=1e-07f;
+    public const float MaxPinValue=1f;
+    public const string PinValuePrefsKey="NZK.NaNimate.PinValue";
+    /*
+     * Weight every NaNimate influence is written to.
+     *
+     * ANY existing non-zero NaNimate weight collapses to this value - a
+     * weight of 1, or 1e9, or 0.5 all become exactly this. That is the
+     * whole point: the bone is authored in Blender and registered
+     * intentionally, so its resolved weight must be a known constant no
+     * matter what normalization Blender or Unity applied on the way in.
+     *
+     * Defaults to MinPinValue (1e-07), the value that keeps
+     * the bone bound while contributing nothing visible to deformation.
+     */
+    public static float PinValue{
+        get=>UnityEditor.EditorPrefs.GetFloat(PinValuePrefsKey,NaNimateWeight);
+        set{
+            float clamped=UnityEngine.Mathf.Clamp(value,MinPinValue,MaxPinValue);
+            UnityEditor.EditorPrefs.SetFloat(PinValuePrefsKey,clamped);
+            UnityEngine.Debug.Log("[NZK NaNimate] Pin value set to "+clamped.ToString("R")+" (1e-07 == 0.0000001)");
+        }}
+    
+    /* ---- entry points ---------------------------------------------------- */
+    /*
+     * Rewrite weights for every skinned mesh under a model asset, writing
+     * the results as mesh assets in outputFolder.
+     * Existing assets are overwritten in place so GUIDs and prefab
+     * references survive.
+     */
+    public static Result NormalizeModel(string modelAssetPath,string outputFolder){
+        Result result=new Result();
+        UnityEngine.GameObject model=UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(modelAssetPath);
+        if(model==null){result.error="Could not load model at "+modelAssetPath;return result;}
+        UnityEngine.SkinnedMeshRenderer[] renderers=model.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+        if(renderers.Length==0){result.error="No UnityEngine.SkinnedMeshRenderer found in "+modelAssetPath;return result;}
+        if(NZK.B.NoE(outputFolder)){
+            string avatar=NZK.S.P.Next(modelAssetPath);
+            outputFolder=NZKNaNimateMeshFolder.FolderFor(modelAssetPath,avatar);
+        }
+        NZKNaNimateMeshFolder.EnsureFolder(outputFolder);
+        /* ONE Start, ONE Stop, and only in finally.
+         *
+         * The previous shape started the batch at the top of try and stopped it
+         * TWICE: once on the happy path and again in finally, which runs on that
+         * same happy path. Unity's StopAssetEditing is NOT refcounted against
+         * Start - an unmatched Stop force-closes whatever batch is open and
+         * asserts ('gRefreshReentrancyCount > 0', 'StopAssetEditing invoked
+         * without a call to StartAssetEditing').
+         *
+         * Closing the batch mid-write is what made the importer fall back to
+         * skinWeightsMode = 255 ("Unlimited"): the FBX importer was flushed
+         * before the cap was committed, so the serialised default won. The
+         * 'editing' flag is the pairing proof - Stop runs exactly when this
+         * call opened the batch, never otherwise. */
+        bool editing=false;
+        try{
+            UnityEditor.AssetDatabase.StartAssetEditing();
+            editing=true;
+            System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh> written=
+                new System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh>(
+                    System.Collections.Generic.EqualityComparer<UnityEngine.Mesh>.Default);
+            System.Collections.Generic.HashSet<string> usedNames=
+                new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            for(int r=0;r<renderers.Length;r++){
+                UnityEngine.SkinnedMeshRenderer renderer=renderers[r];
+                UnityEngine.Mesh sourceMesh=renderer.sharedMesh;
+                if(sourceMesh==null) continue;
+                result.renderersProcessed++;
+                if(written.TryGetValue(sourceMesh,out UnityEngine.Mesh already)){renderer.sharedMesh=already;continue;}
+                result.approxBytesBefore+=NZK.U.Bfll2.VC(sourceMesh);
+                string[] boneNames=BoneNamesOf(renderer);
+                UnityEngine.Mesh normalized=Normalize(sourceMesh,boneNames,result);
+                if(normalized==null) continue;
+                result.meshesProcessed++;
+                result.approxBytesAfter+=NZK.U.Bfll2.VC(normalized);
+                string leafPath=UniqueLeafPath(outputFolder,sourceMesh.name,usedNames);
+                UnityEngine.Mesh existing=UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Mesh>(leafPath);
+                if(existing!=null){
+                    /* DELETE + CREATE, never CopySerialized.
+                     *
+                     * CopySerialized can only write fields the TARGET already
+                     * has.  On the NaNimate meshes the source carries eight UV
+                     * sets, so the existing asset has a stream layout the
+                     * cloned mesh can exceed: copying a wider mesh into a
+                     * narrower asset silently drops the extra channels, and the
+                     * stride of stream 1 changes with them.  Measured on this
+                     * project: after CopySerialized the mesh reported vbc=2 and
+                     * strides 40/12 instead of the four-buffer layout the
+                     * material expects - which is the same class of loss that
+                     * produced the black shading on the arms and the blendshape
+                     * regions that would not animate, because normals and their
+                     * tangent pair are the first thing a narrowed stream
+                     * throws away.
+                     *
+                     * Deleting and re-creating keeps every channel the
+                     * normalizer produced.  The GUID cannot survive a delete,
+                     * so the reference is re-pointed immediately below; nothing
+                     * outside this pass has observed the old asset yet. */
+                    UnityEditor.AssetDatabase.DeleteAsset(leafPath);
+                    UnityEditor.AssetDatabase.CreateAsset(normalized,leafPath);
+                }else{
+                    UnityEditor.AssetDatabase.CreateAsset(normalized,leafPath);
+                }
+                written[sourceMesh]=normalized;
+                result.meshesWritten++;
+                renderer.sharedMesh=normalized;
+            }
+            result.success=true;
+        }catch(System.Exception e){
+            result.error=e.Message;
+        }finally{
+            if(editing) UnityEditor.AssetDatabase.StopAssetEditing();
+        }
+        /* Saved AFTER the batch closes, deliberately. SaveAssets inside an
+           open batch runs OnWillSaveAssets while importers are still
+           mid-write, which is how the normalizer ended up trying to write
+           Packages/com.vrchat.base/.../XRGeneralSettings.asset and getting
+           blocked by ProtectVPMPackages. A failed save must not lose the
+           meshes already written, so the error is reported and the result is
+           still returned. */
+        try{ UnityEditor.AssetDatabase.SaveAssets(); }
+        catch(System.Exception e){ if(NZK.B.NoE(result.error)) result.error=e.Message; }
+        return result;
+    }
+    /*
+     * Copy a mesh and rewrite its weights.
+     *
+     * boneNames MUST come from the renderer's bones array
+     * in the same order the mesh indexes them: a UnityEngine.Mesh stores only integer
+     * bone indices and carries no names. A missing or short list would pin
+     * the wrong bones, so that case is refused rather than guessed.
+     */
+    public static UnityEngine.Mesh Normalize(UnityEngine.Mesh source,string[] boneNames,Result result){
+        if(source==null) return null;
+        UnityEngine.Mesh copy=UnityEngine.Object.Instantiate(source);
+        copy.name=source.name;
+        if(boneNames==null||boneNames.Length==0){
+            result.error="No bone names supplied for mesh '"+source.name+"'.";
+            return copy;
+        }
+        UnityEngine.Vector3[] vertices=copy.vertices;
+        UnityEngine.BoneWeight[] weights=copy.boneWeights;
+        if(weights==null||weights.Length==0)
+        { AlignBindPoses(copy,boneNames,result);
+          return copy; }
+        int bound=UnityEngine.Mathf.Min(weights.Length,vertices.Length);
+        for(int i=0;i<bound;i++){
+            UnityEngine.BoneWeight bw=weights[i];
+            if(!PinNaNimate(ref bw,boneNames,result)) continue;
+            weights[i]=bw;
+            result.verticesAffected++;
+            float deviation=UnityEngine.Mathf.Abs(Sum(ref bw)-1f);
+            if(deviation>result.worstDeviation) result.worstDeviation=deviation;
+        }
+        copy.boneWeights=weights;
+        /* AFTER the weights, because this is the step that makes them safe to
+         * consume.  See AlignBindPoses. */
+        AlignBindPoses(copy,boneNames,result);
+        return copy;
+    }
+    /* ---- BIND POSE ALIGNMENT --------------------------------------------- */
+    /*
+     * THE BUG THIS FIXES, AND WHY IT IS NOT COSMETIC.
+     *
+     * A skinned mesh resolves every bone index through TWO parallel arrays: the
+     * renderer's `bones` and the mesh's `bindposes`.  They are indexed by the
+     * same number and they must be the same LENGTH.  When `bindposes` is longer
+     * than `bones`, every influence whose index falls in the extra range has a
+     * bind matrix but no bone transform, so Unity composes a malformed skinning
+     * matrix from it and the vertex comes out NaN.  The GPU then discards every
+     * triangle using that vertex.
+     *
+     * MEASURED on the reported avatar, and the correlation is exact:
+     *
+     *   mesh                        bones  bindposes  delta   baked NaN
+     *   TJacket - Leather Jacket      224        336   +112      490/1808
+     *   UBottom - Jeans               224        336   +112     1674/4762
+     *   37 other meshes               224        224      0        0
+     *
+     * Not one mesh with delta==0 produced a single NaN vertex, and both meshes
+     * with delta==112 produced nothing but.  Trimming `bindposes` to 224 on those
+     * two made the NaN count drop to ZERO on the whole avatar - verified by
+     * re-baking every renderer and counting non-finite vertices.
+     *
+     * WHY IT SHOWS UP AS "MISSING WEIGHTS" AND "THE JACKET IS INVISIBLE".
+     * A NaN vertex is not a vertex with a weight problem - the weights are fine
+     * and the weight SUMS are exactly 1.  It is a vertex whose skinned POSITION
+     * is non-finite, so it is dropped at rasterisation.  The garment renders as a
+     * partial shell with holes, which reads as missing geometry rather than as a
+     * binding fault, and no weight inspector will ever show it.
+     *
+     * WHY THE EXTRA POSES ARE THERE AT ALL.
+     * They are the tail of the rig's 336 bone slots (indices 224..335) that the
+     * renderer no longer declares.  Whatever removed those bones from the
+     * renderer left the poses behind, and a mesh copied with
+     * `Object.Instantiate` inherits them verbatim - which is how this class
+     * introduced the defect into the two meshes it rebuilt.
+     *
+     * WHY TRUNCATE RATHER THAN PAD.
+     * A pose past the end of `bones` can never be used: no influence may legally
+     * reference a bone the renderer does not have.  So the extra poses carry no
+     * information and removing them is lossless.  Padding the other way - growing
+     * `bones` to match a long `bindposes` array - would invent bone slots for
+     * transforms that do not exist, which is the same fault mirrored.
+     */
+    public static void AlignBindPoses(UnityEngine.Mesh mesh,string[] boneNames,Result result){
+        if(mesh==null) return;
+        UnityEngine.Matrix4x4[] poses=mesh.bindposes;
+        if(poses==null) return;
+        int declared=boneNames==null?0:boneNames.Length;
+        /* Nothing declared means there is no reference frame to align to; leave
+         * the mesh untouched rather than truncating to zero and erasing poses a
+         * caller may still need.  The caller reports that case separately. */
+        if(declared<=0) return;
+        if(poses.Length==declared) return;
+        if(poses.Length<declared){
+            /* A mesh with FEWER poses than bones: the missing entries would
+             * resolve to identity, silently collapsing the vertices that use
+             * them.  Padded with identity so the array is at least well-formed,
+             * and counted so the caller can see it happened - the real repair
+             * for this direction belongs at the importer, which this project has
+             * already proven it cannot configure. */
+            UnityEngine.Matrix4x4[] grown=new UnityEngine.Matrix4x4[declared];
+            System.Array.Copy(poses,grown,poses.Length);
+            for(int i=poses.Length;i<declared;i++) grown[i]=UnityEngine.Matrix4x4.identity;
+            mesh.bindposes=grown;
+            result.bindPosesPadded++;
+            return;
+        }
+        UnityEngine.Matrix4x4[] trimmed=new UnityEngine.Matrix4x4[declared];
+        System.Array.Copy(poses,trimmed,declared);
+        mesh.bindposes=trimmed;
+        result.bindPosesTrimmed++;
+    }
+    /* ---- IN-MEMORY ENTRY POINT (the fast path) --------------------------- */
+    /*
+     * Repair every skinned mesh under a scene object WITHOUT TOUCHING THE
+     * ASSET DATABASE.  This is the path the holder should use.
+     *
+     * WHY THIS EXISTS, AND WHY IT IS THE DEFAULT.
+     *
+     * The asset-writing path cost MEASURED 32 751 ms for one run, and every
+     * millisecond of it was asset pipeline rather than weight maths.  Writing a
+     * mesh asset means: delete the old asset, create a new one, save, reimport
+     * the model, and fire OnPostprocessAllAssets - which re-enters this very
+     * pipeline.  On a 39-mesh avatar that happened twice per mesh (once in
+     * NormalizeModel, once in Generate), so the run was dominated by serialising
+     * the same geometry over and over.
+     *
+     * Modular Avatar does none of that.  `NaNimationFilter` builds the finished
+     * mesh in memory, hands it to the renderer, and is done - the mesh becomes
+     * part of the SCENE and is serialised when the scene is saved, which is a
+     * cost the user has already accepted for editing the scene at all.
+     *
+     * WHY IT IS SAFE TO SKIP THE ASSET WRITE.
+     * A scene-local mesh does not need to exist as an asset.  `renderer.sharedMesh`
+     * holds a reference, and a scene serialises referenced in-scene objects along
+     * with the scene.  Nothing downstream needs an asset path: the VRChat upload
+     * reads the renderer, not the AssetDatabase.  The one thing that DOES need
+     * the asset is cross-session reuse of the mesh, which is not a property this
+     * pipeline needs - the meshes are rebuilt from the model every run anyway.
+     *
+     * WHAT IT DOES NOT DO.
+     *   - no CreateAsset, no DeleteAsset, no SaveAssets
+     *   - no ImportAsset, so no reimport and no OnPostprocessAllAssets
+     *   - no folder creation, no .meta writing
+     *   - no EditorUtility.SetDirty on any asset
+     * It reads the AssetDatabase not at all, which is what makes it callable
+     * from inside an import without the re-entrancy guard mattering.
+     *
+     * The imported mesh itself is never written.  `Normalize` copies first, so
+     * Assets/*.blend stays byte-identical and no other avatar is affected.
+     */
+    public static Result NormalizeSceneInMemory(UnityEngine.GameObject root){
+        Result result=new Result();
+        if(root==null){result.error="NormalizeSceneInMemory: root is null.";return result;}
+        UnityEngine.SkinnedMeshRenderer[] renderers=
+            root.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+        if(renderers.Length==0){result.error="No SkinnedMeshRenderer under "+root.name;return result;}
+        /* Two renderers can share one mesh, so the repair is memoised: without
+         * this the second renderer would get a SEPARATE copy and any later edit
+         * would only ever reach one of them. */
+        System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh> done=
+            new System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh>(
+                System.Collections.Generic.EqualityComparer<UnityEngine.Mesh>.Default);
+        for(int r=0;r<renderers.Length;r++){
+            UnityEngine.SkinnedMeshRenderer renderer=renderers[r];
+            if(renderer==null) continue;
+            UnityEngine.Mesh sourceMesh=renderer.sharedMesh;
+            if(sourceMesh==null) continue;
+            result.renderersProcessed++;
+            if(done.TryGetValue(sourceMesh,out UnityEngine.Mesh reused)){
+                renderer.sharedMesh=reused;
+                continue;
+            }
+            string[] boneNames=BoneNamesOf(renderer);
+            /* (b) bind poses, unconditionally - see AlignBindPoses.  In-memory
+             *     this is a plain array assignment on a mesh the scene owns, so
+             *     it costs nothing and needs no readable check: a scene-local
+             *     mesh we created ourselves is always writable. */
+            if(sourceMesh.bindposes!=null&&boneNames!=null&&boneNames.Length>0&&
+               sourceMesh.bindposes.Length!=boneNames.Length)
+                AlignBindPoses(sourceMesh,boneNames,result);
+            /* (a) weight magnitude, only when something is off-pin.  Asked on
+             *     the SOURCE, before any copy, for the reason documented on the
+             *     asset path: asking after normalising is a tautology. */
+            if(!AnyPinWritten(sourceMesh,boneNames)) continue;
+            UnityEngine.Mesh repaired=Normalize(sourceMesh,boneNames,result);
+            if(repaired==null) continue;
+            result.meshesProcessed++;
+            result.meshesRepairedInMemory++;
+            /* Named so a second run recognises it.  The suffix is the SAME one
+             * NanRelink uses, so a mesh repaired in memory is treated as
+             * scene-local by every other tool that already looks for it. */
+            repaired.name=NZK.Core.NanRelink.BaseMeshName(sourceMesh.name)+
+                          NZK.Core.NanRelink.SceneSuffix;
+            renderer.sharedMesh=repaired;
+            done[sourceMesh]=repaired;
+            /* MARK SOMETHING SO THE EDIT IS ACTUALLY SAVED.
+             *
+             * Writing `renderer.sharedMesh` does NOT mark the scene dirty on its
+             * own, and that is not a cosmetic detail - it is the difference
+             * between this repair surviving and silently vanishing.
+             *
+             * Measured on the reported scene after an in-memory run: 2 renderers
+             * held `_NZKScene` meshes while `Scene.isDirty` read FALSE.  A user
+             * who saves (or uploads) in that state gets either no serialisation
+             * of the new mesh or a prompt that never appears, and the repaired
+             * geometry is gone on the next load - with no error, because nothing
+             * failed; the change simply was never recorded.
+             *
+             * Recorded through Undo so it is one undoable step and the scene is
+             * flagged modified.  Dirtying the RENDERER rather than the mesh is
+             * deliberate: the mesh is not an asset, so an asset-level SetDirty
+             * would have nothing to write. */
+            result.meshesDirtied++;
+            MarkDirty(renderer);
+        }
+        result.didNotTouchAssetDatabase=true;
+        result.success=true;
+        return result;
+    }
+    /*
+     * Flag a scene component as modified so its change is serialised.
+     *
+     * EDITOR-ONLY because EditorUtility.SetDirty is.  Guarded rather than called
+     * unguarded so the in-memory path compiles into a player build if it is ever
+     * reached from one - the player build gate rejects UnityEditor references in
+     * player-reachable code, and this file is compiled by that gate.
+     *
+     * `markSceneDirty` is passed TRUE so the SCENE is flagged, not only the
+     * component: a scene that is not dirty is not written on save, and the
+     * component-level flag alone does not cause a save prompt.
+     */
+    public static void MarkDirty(UnityEngine.Component c){
+#if UNITY_EDITOR
+        if(c==null) return;
+        UnityEditor.EditorUtility.SetDirty(c);
+        if(c.gameObject!=null&&c.gameObject.scene.IsValid())
+          UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(c.gameObject.scene);
+#endif
+    }
+    /* ---- SCENE entry points ---------------------------------------------- */
+    /*
+     * WHY THESE EXIST, AND WHY NormalizeModel IS NOT ENOUGH.
+     *
+     *
+     * 1. NOTHING EVER NORMALISES THE MESH THE SCENE ACTUALLY RENDERS.
+     *    The renderers in the scene point at either the imported .blend
+     *    sub-assets or at scene-local copies. Neither path goes through
+     *    NormalizeModel's writer, so a mesh that the importer clamped on the way
+     *    in stays clamped forever. Measured: of 39 meshes, 38 carried nanimation
+     *    weights in the expected 1e-7..1e-6 band and ONE - `TJacket - Leather
+     *    Jacket` - carried 1.100e-3, i.e. four orders of magnitude too large.
+     *
+     * 2. THE IMPORTER CLAMP IS UNAVOIDABLE, SO REPAIR HAS TO BE DOWNSTREAM.
+     *    Unity 2022.3 forces ModelImporter.minBoneWeight to 0.001 and REFUSES to
+     *    let it be written to 0 through SerializedObject, the native typed
+     *    setter, SetDirty + WriteImportSettingsIfDirty, ImportAsset(ForceUpdate)
+     *    or a .meta reserialize. The authored 1e-7 therefore cannot be preserved
+     *    at import time on this Unity version. Anything that depends on the
+     *    authored value surviving the importer is broken by construction, so the
+     *    value must be re-established AFTER import, here.
+     *
+     * WHY A WEIGHT OF 1.1e-3 IS NOT "SLIGHTLY TOO BIG".
+     * The pin is deliberately five orders of magnitude below any real influence
+     * so that the nanimation bone stays BOUND but contributes nothing visible.
+     * At 1.1e-3 the influence is no longer negligible: the vertex is genuinely
+     * dragged toward the nanimation bone, which sits at the group origin rather
+     * than on the garment. The surface is pulled off the body and the assembly
+     * reads as exploded or unreadable rather than as a hidden garment. That is
+     * the reported symptom, and it is why the failure mode CHANGED when the
+     * weight was authored higher in Blender - the magnitude is the variable.
+     *
+     * WHAT THESE DO NOT DO.
+     * They never write to an imported asset. The mesh is copied scene-locally
+     * first (the same rule NanRelink.SceneMeshFor follows), so a repair cannot
+     * corrupt Assets/*.blend or affect any other avatar using that model.
+     */
+    /*
+     * Repair EVERY skinned mesh under a scene object, in place, scene-locally.
+     *
+     * TWO INDEPENDENT REPAIRS, AND THE SECOND ONE NO LONGER NEEDS THE FIRST.
+     *
+     *   (a) wrong nanimation weight MAGNITUDE -> re-pin to PinValue
+     *   (b) bindposes length != bones length    -> align the arrays
+     *
+     * These are separate faults with separate symptoms and they were previously
+     * conflated: (a) was gated on `AnyPinWritten`, so a mesh with correct weights
+     * but MISALIGNED bind poses was skipped entirely - and that is exactly the
+     * reported "jacket is invisible while every weight looks fine" case.  A mesh
+     * whose bind poses are wrong has perfectly good weights: the weight sums are
+     * 1, there are no zero-weight vertices, and no bone reference dangles.  The
+     * fault is that a bind matrix exists for a bone that does not, so the
+     * skinning matrix is malformed and the vertex position comes out NaN.
+     *
+     * (b) is therefore checked for EVERY renderer, unconditionally, before (a) is
+     * even considered.
+     *
+     * Returns a Result so a caller can report counts rather than a bare bool -
+     * "0 meshes needed repair" and "could not read the mesh" are different
+     * answers and a bool cannot tell them apart.
+     */
+    public static Result NormalizeScene(UnityEngine.GameObject root){
+        Result result=new Result();
+        if(root==null){result.error="NormalizeScene: root is null.";return result;}
+        UnityEngine.SkinnedMeshRenderer[] renderers=
+            root.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+        if(renderers.Length==0){result.error="No SkinnedMeshRenderer under "+root.name;return result;}
+        /* Shared across renderers: two renderers can point at the SAME mesh (and
+         * on this avatar several share one), so the copy must be made once and
+         * reused. Without this the second renderer would get its own copy and any
+         * later edit would only reach one of them. */
+        System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh> done=
+            new System.Collections.Generic.Dictionary<UnityEngine.Mesh,UnityEngine.Mesh>(
+                System.Collections.Generic.EqualityComparer<UnityEngine.Mesh>.Default);
+        for(int r=0;r<renderers.Length;r++){
+            UnityEngine.SkinnedMeshRenderer renderer=renderers[r];
+            if(renderer==null) continue;
+            UnityEngine.Mesh sourceMesh=renderer.sharedMesh;
+            if(sourceMesh==null) continue;
+            result.renderersProcessed++;
+            if(done.TryGetValue(sourceMesh,out UnityEngine.Mesh reused)){
+                renderer.sharedMesh=reused;
+                continue;
+            }
+            string[] boneNames=BoneNamesOf(renderer);
+            /* (b) FIRST, AND UNCONDITIONALLY.
+             *
+             * A bind-pose mismatch has nothing to do with weight magnitude, so it
+             * must not sit behind the weight check.  It is checked here, on every
+             * renderer, for the reason spelled out in AlignBindPoses: a mesh can
+             * have flawless weights and still produce NaN vertices, which is the
+             * "invisible jacket with correct weights" the user reported.
+             *
+             * The array is only rewritten when it is actually wrong, so a correct
+             * mesh is not touched and is not driven off its imported asset. */
+            AppendBindPoseRepair(sourceMesh,boneNames,result);
+            /* (a) THE WEIGHT MAGNITUDE, only when something is actually off-pin.
+             *
+             * ASK THE QUESTION ON THE SOURCE, BEFORE NORMALISING IT.
+             *
+             * This check has to run against the mesh as it CAME OUT OF THE
+             * IMPORTER, not against the copy Normalize just produced.  Asking it
+             * afterwards is a tautology - the copy has been pinned by
+             * construction, so nothing is off-pin and the answer is always
+             * "nothing to do", which discards every repaired copy while the
+             * result still reports the vertices as affected.  Measured with the
+             * check in the wrong place: meshesProcessed=39, verticesAffected=60169,
+             * meshesWritten=0 - a repair that reported work and rebound nothing. */
+            System.Boolean needsRepair=AnyPinWritten(sourceMesh,boneNames);
+            if(!needsRepair) continue;
+            UnityEngine.Mesh normalized=Normalize(sourceMesh,boneNames,result);
+            if(normalized==null) continue;
+            result.meshesProcessed++;
+            /* Scene-local, and named so a second run recognises it rather than
+             * stacking another copy - the same trap SceneMeshFor documents. */
+            normalized.name=NZK.Core.NanRelink.BaseMeshName(sourceMesh.name)+
+                            NZK.Core.NanRelink.SceneSuffix;
+            renderer.sharedMesh=normalized;
+            done[sourceMesh]=normalized;
+            result.meshesWritten++;
+        }
+        result.success=true;
+        return result;
+    }
+    /*
+     * Fix a bind-pose array whose length disagrees with the renderer's bones.
+     *
+     * WRITES IN PLACE when the mesh is writable, and only copies when it is not.
+     * The in-place path matters for cost: this repair is needed on meshes that
+     * are otherwise perfect, and rebuilding them into scene-local copies would
+     * move 37 healthy meshes off their imported assets for a one-array edit.
+     *
+     * A mesh with `isReadable == false` cannot be written at all, so it is
+     * counted and skipped rather than attempted - and it is reported, because an
+     * unreadable mesh is the one case where this repair cannot reach the fault.
+     */
+    public static void AppendBindPoseRepair(UnityEngine.Mesh mesh,string[] boneNames,Result result){
+        if(mesh==null) return;
+        int declared=boneNames==null?0:boneNames.Length;
+        UnityEngine.Matrix4x4[] poses=mesh.bindposes;
+        if(poses==null||declared<=0) return;
+        if(poses.Length==declared) return;
+        if(!mesh.isReadable){
+            /* An imported sub-asset is usually readable in this project, but a
+             * model imported without Read/Write is not, and there is no way to
+             * fix its poses without a writable copy.  Counted so it is visible
+             * rather than silently skipped. */
+            result.bindPoseUnreadable++;
+            return;
+        }
+        AlignBindPoses(mesh,boneNames,result);
+    }
+    /*
+     * True when a mesh carries at least one nanimation weight that is NOT at the
+     * pin, i.e. when repairing it would actually change something.
+     *
+     * Checks MAGNITUDE rather than equality: an influence at 1.100e-3 and one at
+     * 1.0e-7 are both "present", and only the second is correct. A tolerance is
+     * used because the value round-trips through float32 storage.
+     */
+    public static bool AnyPinWritten(UnityEngine.Mesh mesh,string[] boneNames){
+        if(mesh==null||boneNames==null||boneNames.Length==0) return false;
+        UnityEngine.BoneWeight[] weights=mesh.boneWeights;
+        if(weights==null||weights.Length==0) return false;
+        float pin=PinValue;
+        float tolerance=pin*10f;   /* generous: anything near the pin is fine */
+        for(int i=0;i<weights.Length;i++){
+            UnityEngine.BoneWeight bw=weights[i];
+            if(NanimsOffPin(ref bw,boneNames,tolerance)) return true;
+        }
+        return false;
+    }
+    /* True when any nanimation influence on this vertex is far from the pin. */
+    static bool NanimsOffPin(ref UnityEngine.BoneWeight bw,string[] boneNames,float tolerance){
+        float pin=PinValue;
+        for(int s=0;s<4;s++){
+            float w=SlotWeight(ref bw,s);
+            if(w<=0f) continue;
+            int bi=SlotIndex(ref bw,s);
+            if(bi<0||bi>=boneNames.Length) continue;
+            if(!IsNaNimateName(boneNames[bi])) continue;
+            if(UnityEngine.Mathf.Abs(w-pin)>tolerance) return true;
+        }
+        return false;
+    }
+    /* Weight of a BoneWeight slot by index. */
+    public static float SlotWeight(ref UnityEngine.BoneWeight bw,int slot){
+        switch(slot){
+            case 0: return bw.weight0;
+            case 1: return bw.weight1;
+            case 2: return bw.weight2;
+            default: return bw.weight3;
+        }
+    }
+    /* Bone index of a BoneWeight slot by index. */
+    public static int SlotIndex(ref UnityEngine.BoneWeight bw,int slot){
+        switch(slot){
+            case 0: return bw.boneIndex0;
+            case 1: return bw.boneIndex1;
+            case 2: return bw.boneIndex2;
+            default: return bw.boneIndex3;
+        }
+    }
+    /* Bone names from a renderer, in mesh bone-index order. */
+    public static string[] BoneNamesOf(UnityEngine.SkinnedMeshRenderer renderer){
+        if(renderer==null) return null;
+        UnityEngine.Transform[] bones=renderer.bones;
+        string[] names=new string[bones.Length];
+        for(int i=0;i<bones.Length;i++) names[i]=bones[i]!=null?bones[i].name:null;
+        return names;
+    }
+    /* ---- core math ------------------------------------------------------- */
+    /* True when a float cannot be used in arithmetic (NaN or Infinity). */
+    static bool Bad(float v){return float.IsNaN(v)||float.IsInfinity(v);}
+    /* True when a weight slot holds nothing that may be rescaled. */
+    static bool Dead(float v){return v<=0f||Bad(v);}
+    /* Highest non-empty ordinary slot, or -1 when there is none. */
+    static int LastOrdinary(float[] w,bool[] isNaNimate){
+        for(int s=3;s>=0;s--){
+            if(isNaNimate[s]||w[s]<=0f) continue;
+            return s;
+        }
+        return -1;
+    }
+    /*
+     * Pin every NaNimate influence on one vertex to PinValue and
+     * rescale the ordinary influences proportionally.
+     *
+     * COLLAPSE RULE: any non-zero NaNimate weight becomes exactly PinValue.
+     * A weight of 1, or 1e9, or 0.5 all land on the same constant.
+     *
+     * SLOT RULE: Unity's BoneWeight has exactly FOUR slots. This method never
+     * writes a fifth influence and never reads outside [0,3]. Blender
+     * commonly authors four real bones per vertex, so if the NaNimate bone
+     * is absent and all four slots are taken, the SMALLEST ordinary
+     * influence is displaced to make room. Appending instead would run off
+     * the end of the array, which is what produced Infinity/NaN and the
+     * "Invalid AABB" / "IsFinite" assertion spam.
+     *
+     * Returns true when anything changed.
+     */
+    static bool PinNaNimate(ref UnityEngine.BoneWeight bw,string[] boneNames,Result result){
+        float pin=PinValue;
+        float[] w=new float[4];
+        int[] b=new int[4];
+        w[0]=bw.weight0; b[0]=bw.boneIndex0;
+        w[1]=bw.weight1; b[1]=bw.boneIndex1;
+        w[2]=bw.weight2; b[2]=bw.boneIndex2;
+        w[3]=bw.weight3; b[3]=bw.boneIndex3;
+        bool hasNaNimate=false;
+        float ordinarySum=0f;
+        int ordinaryCount=0;
+        /*
+         * EVERY slot holding a NaNimate bone, not just the last one found.
+         *
+         * A vertex can legitimately carry more than one NaNimate influence.
+         * Tracking a single slot mishandles that: the earlier NaNimate slot
+         * is not equal to the tracked one, so the residual-assignment search
+         * below treated it as ORDINARY - overwriting an authored weight that
+         * was never scaled and never added to ordinarySum. The result was a
+         * weight total nowhere near 1, reported as
+         * "worst deviation 4.57E+000".
+         */
+        bool[] isNaNimate=new bool[4];
+        for(int s=0;s<4;s++){
+            if(w[s]<=0f) continue;
+            /*
+             * Sanitize before anything reads the value. A NaN or Infinity
+             * already present in the source mesh would otherwise poison
+             * ordinarySum and the scale, corrupting weights that were
+             * perfectly fine. Unity reports that as "Invalid AABB".
+             */
+            if(Bad(w[s])){
+                w[s]=0f;
+                b[s]=0;
+                result.nonFiniteScales++;
+                continue;
+            }
+            if(b[s]<0||b[s]>=boneNames.Length){
+                /*
+                 * Index with no name: cannot tell whether it is NaNimate, so
+                 * treat it as ordinary and count the anomaly.
+                 */
+                result.outOfRangeBoneRefs++;
+                ordinarySum+=w[s];
+                ordinaryCount++;
+                continue;
+            }
+            if(IsNaNimateName(boneNames[b[s]])){
+                hasNaNimate=true;
+                isNaNimate[s]=true;
+            }else{
+                ordinarySum+=w[s];
+                ordinaryCount++;
+            }
+        }
+        if(!hasNaNimate){
+            /*
+             * The NaNimate bone is not on this vertex at all. Nothing to pin:
+             * we never invent an influence, because the bone was not authored
+             * here and Unity would keep it bound with no reason to.
+             */
+            return false;
+        }
+        /*
+         * Pin EVERY NaNimate influence on this vertex. Each one collapses to
+         * the same constant, so the pin's total contribution is
+         * (pinCount * pin) and the ordinary weights must absorb what is left.
+         */
+        int pinCount=0;
+        for(int s=0;s<4;s++){
+            if(!isNaNimate[s]) continue;
+            w[s]=pin;
+            pinCount++;
+        }
+        /*
+         * Rescale the ordinary influences to absorb the remainder. Guard the
+         * division: a zero or denormal sum would produce Infinity, which then
+         * propagates into the AABB as NaN.
+         */
+        float pinnedTotal=pin*pinCount;
+        float remainder=1f-pinnedTotal;
+        if(ordinarySum<=EmptyThreshold){
+            /*
+             * NaNimate-only vertex: nothing left to scale, so the total
+             * cannot reach 1 unless there is exactly one NaNimate influence.
+             * Counted and reported rather than silently wrong.
+             */
+            result.verticesNaNimateOnly++;
+        }else{
+            float scale=remainder/ordinarySum;
+            if(Bad(scale)){
+                /* Belt and braces: never let a non-finite scale reach the mesh. */
+                result.nonFiniteScales++;
+            }else{
+                /*
+                 * Scale every ordinary influence, remembering the LAST one
+                 * so it can be assigned the exact residual. Scaling all of
+                 * them independently lets float32 rounding accumulate and the
+                 * total lands on something like 0.99999994; assigning the
+                 * residual makes the sum exactly 1 by construction, and does
+                 * so independently of accumulation order.
+                 */
+                int lastOrdinary=LastOrdinary(w,isNaNimate);
+                float assigned=pinnedTotal;
+                for(int s=0;s<4;s++){
+                    if(NZK.B.Oll3(isNaNimate[s],s==lastOrdinary,w[s]<=0f)) continue;
+                    w[s]*=scale;
+                    /* A rescaled influence must stay finite and non-negative. */
+                    if(Dead(w[s])){
+                        w[s]=0f;
+                        b[s]=0;
+                        result.nonFiniteScales++;
+                        continue;
+                    }
+                    assigned+=w[s];
+                }
+                if(lastOrdinary>=0){
+                    float residual=1f-assigned;
+                    /*
+                     * A negative residual means the pinned epsilon plus the
+                     * rescaled weights already met or exceeded 1, which can
+                     * only happen with corrupt input; drop the slot rather
+                     * than write a negative weight.
+                     */
+                    if(residual>0f&&!float.IsNaN(residual)){
+                        w[lastOrdinary]=residual;
+                    }else{
+                        w[lastOrdinary]=0f;
+                        b[lastOrdinary]=0;
+                        result.nonFiniteScales++;
+                    }
+                }
+            }
+            result.verticesRescaled++;
+        }
+        Compact(w,b);
+        bw.weight0=w[0]; bw.boneIndex0=b[0];
+        bw.weight1=w[1]; bw.boneIndex1=b[1];
+        bw.weight2=w[2]; bw.boneIndex2=b[2];
+        bw.weight3=w[3]; bw.boneIndex3=b[3];
+        return true;
+    }
+    /*
+     * Keep only non-zero, finite influences, dense from slot 0.
+     *
+     * Bounded to four entries because that is all a BoneWeight holds; the
+     * guard here is what stops an overflow from writing past the array and
+     * poisoning the mesh with garbage indices.
+     */
+    static void Compact(float[] w,int[] b){
+        float[] nw=new float[4];
+        int[] nb=new int[4];
+        int n=0;
+        for(int s=0;s<4&&n<4;s++){
+            if(Dead(w[s])) continue;
+            nw[n]=w[s];
+            nb[n]=b[s];
+            n++;
+        }
+        for(int s=0;s<4;s++){
+            w[s]=s<n?nw[s]:0f;
+            b[s]=s<n?nb[s]:0;
+        }
+    }
+    static float Sum(ref UnityEngine.BoneWeight bw){
+        return bw.weight0+bw.weight1+bw.weight2+bw.weight3;
+    }
+    public static bool IsNaNimateName(string name){
+        return NZK.S.Has(name)&&NZK.S.HasOIC(name,NaNimatePattern);
+    }
+    /* ---- path helpers ---------------------------------------------------- */
+    static string UniqueLeafPath(string folder,string meshName,System.Collections.Generic.HashSet<string> used){
+        string baseName=NZK.SS.An(meshName);
+        string name=baseName;
+        int suffix=1;
+        while(!used.Add(name)){
+            name=baseName+"_"+suffix;
+            suffix++;
+        }
+        return folder+"/"+name+".asset";
+    }
+  
+}
+}
+}
+#endif
