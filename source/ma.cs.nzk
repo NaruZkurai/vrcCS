@@ -116,7 +116,174 @@ public static partial class Core
       public System.Int32 MeshesSkipped;
       /** Non-null when the pass could not proceed at all. */
       public System.String error;
+
+      /** One-line summary, so a ucli reflection call prints something readable
+       *  instead of the type name (`NZK.Core+MA+Report`). */
+      public override System.String ToString()
+      { return nameof(MeshesInspected) + "=" + MeshesInspected +
+               " " + nameof(MeshesRebuilt) + "=" + MeshesRebuilt +
+               " " + nameof(VerticesSplit) + "=" + VerticesSplit +
+               " " + nameof(BonesCreated) + "=" + BonesCreated +
+               " " + nameof(BuffersCreated) + "=" + BuffersCreated +
+               " " + nameof(MeshesSkipped) + "=" + MeshesSkipped +
+               " error=" + (error ?? ""); }
     }
+
+    /* ── BLENDSHAPE-DRIVEN ENTRY POINT ───────────────────────────────── */
+
+    /** <summary>Turn this renderer's blendshapes into nanimation groups.
+     *
+     *  THE AUTHORING CONTRACT, and it is deliberately this simple:
+     *
+     *    - In Blender, a garment's vertex group becomes a BLENDSHAPE with the
+     *      same name as the bone that should drive it.
+     *    - A vertex belongs to the group if the shape MOVES it, i.e. its delta
+     *      is non-zero.
+     *    - The shape's scale-to-zero trick is the authoring marker; what matters
+     *      here is only which vertices the shape touches.
+     *
+     *  WHY BLENDSHAPES AND NOT VERTEX GROUPS, stated because it is the whole
+     *  reason for this rework:
+     *
+     *  Unity clamps `ModelImporter.minBoneWeight` to 0.001 and REFUSES every
+     *  write path to change it (SerializedObject, the native typed setter,
+     *  WriteImportSettingsIfDirty, ImportAsset(ForceUpdate), a .meta
+     *  reserialize, and editing the .meta by hand - writing 0.01 reads back as
+     *  0.001).  A vertex GROUP authored at 1e-7 therefore cannot survive the
+     *  importer, and nothing downstream can recover a value that was dropped at
+     *  import time.
+     *
+     *  A BLENDSHAPE is not subject to that clamp.  Measured on this project:
+     *  `Top - Corset` retains its shapes and `Laced Top` still moves 600 of
+     *  2435 vertices.  So the shape is a reliable CARRIER for "which vertices
+     *  belong to this garment", which a weight cannot be.
+     *
+     *  THE SHAPE IS USED ONLY AS A SELECTOR.  The hiding is still done by a
+     *  dedicated bone scaled to NaN, because a blendshape can only MOVE
+     *  geometry - it cannot make a vertex non-finite, so it cannot make the GPU
+     *  discard a triangle.  Selection and hiding are therefore two different
+     *  mechanisms and this method joins them.
+     *
+     *  NAME MATCHING, and why it is not equality.  Measured names on this
+     *  avatar: shapes are `Bodysuit`, `Jeans`, `Skirt`, `Tech Jacket`; bones are
+     *  `NaNimate Bodysuit`, `NaNimate Jeans`, `NaNimate Skirt`,
+     *  `NaNimate Leather Jacket`.  Only `NaNimate Stockings` matches exactly.
+     *  So the match is: strip an optional `NaNimate `/`Nanimate ` prefix from EITHER
+     *  side, then compare case-insensitively.  A shape with no matching bone is
+     *  REPORTED, not silently dropped - a garment that does not toggle because
+     *  its bone is named differently is exactly the silent failure this whole
+     *  investigation was about.</summary> */
+    public static Report ApplyFromBlendShapes(
+      UnityEngine.SkinnedMeshRenderer renderer,
+      UnityEngine.Transform nanimationGroup)
+    { Report report = new Report();
+      if (renderer == null) { report.error = "renderer is null"; return report; }
+      UnityEngine.Mesh mesh = renderer.sharedMesh;
+      if (mesh == null) { report.error = "renderer has no mesh"; return report; }
+      if (nanimationGroup == null) { report.error = "no NaNimations group given"; return report; }
+      if (mesh.blendShapeCount == 0) { report.MeshesSkipped = 1; return report; }
+
+      /* IDEMPOTENCY.  Re-running the tool must not stack a second set of NaN
+       * bones on the same mesh - which is what happened when the report bug was
+       * fixed and the pass ran twice but reported success both times
+       * (`BEFORE bones=228` on the second run).  Detect our own output: every
+       * bone we create is named `<group>` or `<group>_<i>` and lives under a
+       * `NZK_NanimBuffer_<n>` transform, so a renderer that already carries a
+       * buffer object has already been processed. */
+      UnityEngine.Transform[] existing = renderer.bones;
+      for (System.Int32 b = 0; b < existing.Length; b++)
+      { UnityEngine.Transform t = existing[b];
+        if (t == null) continue;
+        UnityEngine.Transform p = t.parent;
+        if (p != null && p.name.StartsWith("NZK_NanimBuffer",System.StringComparison.Ordinal))
+        { report.MeshesSkipped = 1;
+          report.error = "already processed: bone '" + t.name + "' sits under '" + p.name + "'";
+          return report; } }
+
+      report.MeshesInspected = 1;
+
+      /* Bone lookup by NORMALISED name, so the matching rule lives in exactly
+       * one place and cannot drift between the resolve and the report. */
+      System.Collections.Generic.Dictionary<System.String,UnityEngine.Transform> boneByName =
+        new System.Collections.Generic.Dictionary<System.String,UnityEngine.Transform>(System.StringComparer.OrdinalIgnoreCase);
+      for (System.Int32 i = 0; i < nanimationGroup.childCount; i++)
+      { UnityEngine.Transform b = nanimationGroup.GetChild(i);
+        if (b == null) continue;
+        System.String key = NormaliseName(b.name);
+        if (!boneByName.ContainsKey(key)) boneByName[key] = b; }
+
+      System.Collections.Generic.List<Group> groups = new System.Collections.Generic.List<Group>();
+      System.Collections.Generic.List<System.String> unmatched = new System.Collections.Generic.List<System.String>();
+      System.Int32 vertCount = mesh.vertexCount;
+      UnityEngine.Vector3[] dPos = new UnityEngine.Vector3[vertCount];
+      UnityEngine.Vector3[] dNrm = new UnityEngine.Vector3[vertCount];
+      UnityEngine.Vector3[] dTan = new UnityEngine.Vector3[vertCount];
+
+      for (System.Int32 si = 0; si < mesh.blendShapeCount; si++)
+      { System.String shapeName = mesh.GetBlendShapeName(si);
+        /* Fusion shapes and Blender's leftover Basis are not garments. */
+        if (System.String.IsNullOrEmpty(shapeName)) continue;
+        if (NZK.S.HasOIC(shapeName,"Basis")) continue;
+
+        if (!boneByName.TryGetValue(NormaliseName(shapeName),out UnityEngine.Transform bone))
+        { unmatched.Add(shapeName); continue; }
+
+        /* FIRST FRAME ONLY.  A nanimation shape is a membership marker, not an
+         * animation - every frame would describe the same vertices, and reading
+         * frame 0 keeps the cost to one pass per shape. */
+        mesh.GetBlendShapeFrameVertices(si,0,dPos,dNrm,dTan);
+        Group g = new Group { name = bone.name };
+        for (System.Int32 v = 0; v < vertCount; v++)
+        { /* A vertex belongs when the shape DISPLACES it.  The epsilon is well
+           * below any authored garment motion (measured deltas run 1.7e-5 to
+           * 4.7e-3) and well above float noise, so a vertex that is merely
+           * numerically touched is not counted as a member. */
+          if (dPos[v].sqrMagnitude > 1e-12f ||
+              dNrm[v].sqrMagnitude > 1e-12f ||
+              dTan[v].sqrMagnitude > 1e-12f)
+            g.vertices.Add(v); }
+        if (g.vertices.Count == 0) continue;
+        groups.Add(g); }
+
+      if (groups.Count == 0)
+      { report.MeshesSkipped = 1;
+        if (unmatched.Count > 0)
+          report.error = "no blendshape matched a bone under '" + nanimationGroup.name +
+                         "'. Unmatched: " + System.String.Join(", ",unmatched.ToArray());
+        return report; }
+
+      /* Call Rebuild DIRECTLY, passing this report by ref.  Going through
+       * `Apply` would start a fresh Report and lose the shaping counts gathered
+       * above - which is exactly how a pass that created 25 bones reported
+       * BonesCreated=0.  One pass, one Report. */
+      System.Boolean anySelection = false;
+      for (System.Int32 g = 0; g < groups.Count; g++)
+        if (groups[g] != null && groups[g].vertices.Count > 0) { anySelection = true; break; }
+      if (!anySelection) { report.MeshesSkipped = 1; return report; }
+
+      System.String err = null;
+      System.Collections.Generic.Dictionary<System.String,System.Collections.Generic.List<UnityEngine.GameObject>> made =
+        Rebuild(renderer,mesh,groups,ref report,out err);
+      if (!NZK.B.NoE(err)) { report.error = err; return report; }
+
+      /* The bones `Rebuild` made are parented into the scene; nothing else to
+       * do here.  Shaping counts and surgery counts are already in `report`. */
+      return report; }
+
+    /** <summary>Strip an optional NaNimate prefix and lowercase, for name matching.
+     *
+     *  Handles the spellings observed in this project: `NaNimate X`, `Nanimate X`
+     *  and a bare `X`.  The prefix is removed from BOTH sides of a comparison, so
+     *  `Bodysuit` matches `NaNimate Bodysuit` and also `NaNimate Bodysuit`
+     *  matches `NaNimate Bodysuit` without either being special-cased. */
+    public static System.String NormaliseName(System.String name)
+    { if (!NZK.S.Has(name)) return name;
+      System.String s = name.Trim();
+      /* Case-insensitive prefix strip.  Checked rather than replaced blindly so
+       * a garment genuinely called "Nanimate..." cannot be mangled twice. */
+      if (s.Length > 9 && NZK.S.HasOIC(s.Substring(0,9),"nanimate "))
+        s = s.Substring(9).Trim();
+      return s.ToLowerInvariant(); }
 
     /* ── ENTRY POINT ─────────────────────────────────────────────────── */
 
@@ -142,6 +309,19 @@ public static partial class Core
       UnityEngine.Mesh source = renderer.sharedMesh;
       if (source == null) { report.error = "renderer has no mesh"; return report; }
       if (groups == null || groups.Count == 0) { report.error = "no groups given"; return report; }
+
+      /* Same idempotency guard as ApplyFromBlendShapes: a renderer already
+       * carrying a NZK buffer bone has been processed and must not be stacked on. */
+      UnityEngine.Transform[] existing = renderer.bones;
+      for (System.Int32 b = 0; b < existing.Length; b++)
+      { UnityEngine.Transform t = existing[b];
+        if (t == null) continue;
+        UnityEngine.Transform p = t.parent;
+        if (p != null && p.name.StartsWith("NZK_NanimBuffer",System.StringComparison.Ordinal))
+        { report.MeshesSkipped = 1;
+          report.error = "already processed: bone '" + t.name + "' sits under '" + p.name + "'";
+          return report; } }
+
       report.MeshesInspected = 1;
 
       /* Only vertices that actually need splitting force a rebuild.  A mesh with
@@ -154,7 +334,7 @@ public static partial class Core
 
       System.String err = null;
       System.Collections.Generic.Dictionary<System.String,System.Collections.Generic.List<UnityEngine.GameObject>> made =
-        Rebuild(renderer,source,groups,report,out err);
+        Rebuild(renderer,source,groups,ref report,out err);
       if (err != null) { report.error = err; return report; }
 
       report.MeshesRebuilt = 1;
@@ -179,9 +359,10 @@ public static partial class Core
       UnityEngine.SkinnedMeshRenderer renderer,
       UnityEngine.Mesh mesh,
       System.Collections.Generic.List<Group> groups,
-      Report report,
+      ref Report report,
       out System.String error)
     { error = null;
+      report.MeshesRebuilt = 1;
       System.Collections.Generic.Dictionary<System.String,System.Collections.Generic.List<UnityEngine.GameObject>> result =
         new System.Collections.Generic.Dictionary<System.String,System.Collections.Generic.List<UnityEngine.GameObject>>(System.StringComparer.Ordinal);
       if (!mesh.isReadable)

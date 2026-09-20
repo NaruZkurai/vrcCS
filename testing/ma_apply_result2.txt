@@ -1,0 +1,74 @@
+=== Stockings
+  BEFORE v=7649 bones=253 bp=253
+    MeshesInspected=1
+    MeshesRebuilt=1
+    VerticesSplit=295
+    BonesCreated=48
+    BuffersCreated=19
+    MeshesSkipped=0
+    error=
+  AFTER  v=7944 bones=301 bp=301
+     new[224] NaNimate Jeans_0 parent=NZK_NanimBuffer_0
+     new[225] NaNimate Jeans_1 parent=NZK_NanimBuffer_1
+     new[226] NaNimate Jeans_2 parent=NZK_NanimBuffer_2
+     new[227] NaNimate Jeans_3 parent=NZK_NanimBuffer_3
+     new[228] NaNimate Jeans_4 parent=NZK_NanimBuffer_4
+     new[230] NaNimate Bodysuit_0 parent=NZK_NanimBuffer_5
+     new[231] NaNimate Bodysuit_1 parent=NZK_NanimBuffer_6
+     new[233] NaNimate Stockings_1 parent=NZK_NanimBuffer_7
+     new[234] NaNimate Stockings_2 parent=NZK_NanimBuffer_8
+     new[241] NaNimate Stockings_9 parent=NZK_NanimBuffer_9
+     new[242] NaNimate Stockings_10 parent=NZK_NanimBuffer_10
+     new[243] NaNimate Stockings_11 parent=NZK_NanimBuffer_11
+     new[244] NaNimate Stockings_12 parent=NZK_NanimBuffer_12
+     new[245] NaNimate Stockings_13 parent=NZK_NanimBuffer_13
+     new[246] NaNimate Stockings_14 parent=NZK_NanimBuffer_14
+     new[247] NaNimate Stockings_15 parent=NZK_NanimBuffer_15
+     new[248] NaNimate Stockings_16 parent=NZK_NanimBuffer_16
+     new[249] NaNimate Stockings_17 parent=NZK_NanimBuffer_17
+     new[250] NaNimate Stockings_18 parent=NZK_NanimBuffer_18
+     new[251] NaNimate Stockings_19 parent=NZK_NanimBuffer_1
+     new[252] NaNimate Stockings_20 parent=NZK_NanimBuffer_2
+     new[254] NaNimate Jeans_1 parent=NZK_NanimBuffer_0
+     new[257] NaNimate Jeans_4 parent=NZK_NanimBuffer_1
+     new[260] NaNimate Jeans_7 parent=NZK_NanimBuffer_2
+     new[261] NaNimate Jeans_8 parent=NZK_NanimBuffer_3
+     new[263] NaNimate Jeans_10 parent=NZK_NanimBuffer_4
+     new[264] NaNimate Jeans_11 parent=NZK_NanimBuffer_5
+     new[268] NaNimate Bodysuit_0 parent=NZK_NanimBuffer_6
+     new[269] NaNimate Bodysuit_1 parent=NZK_NanimBuffer_7
+     new[272] NaNimate Bodysuit_4 parent=NZK_NanimBuffer_1
+     new[274] NaNimate Stockings_1 parent=NZK_NanimBuffer_2
+     new[275] NaNimate Stockings_2 parent=NZK_NanimBuffer_3
+     new[281] NaNimate Stockings_8 parent=NZK_NanimBuffer_8
+     new[283] NaNimate Stockings_10 parent=NZK_NanimBuffer_9
+     new[284] NaNimate Stockings_11 parent=NZK_NanimBuffer_10
+     new[289] NaNimate Stockings_16 parent=NZK_NanimBuffer_11
+     new[290] NaNimate Stockings_17 parent=NZK_NanimBuffer_12
+     new[291] NaNimate Stockings_18 parent=NZK_NanimBuffer_13
+     new[292] NaNimate Stockings_19 parent=NZK_NanimBuffer_14
+     new[293] NaNimate Stockings_20 parent=NZK_NanimBuffer_15
+     new[294] NaNimate Stockings_21 parent=NZK_NanimBuffer_16
+     new[295] NaNimate Stockings_22 parent=NZK_NanimBuffer_17
+     new[296] NaNimate Stockings_23 parent=NZK_NanimBuffer_18
+     new[299] NaNimate Stockings_26 parent=NZK_NanimBuffer_4
+     new[300] NaNimate Stockings_27 parent=NZK_NanimBuffer_5
+=== TJacket - Leather Jacket
+  BEFORE v=1808 bones=228 bp=228
+    MeshesInspected=1
+    MeshesRebuilt=1
+    VerticesSplit=0
+    BonesCreated=4
+    BuffersCreated=4
+    MeshesSkipped=0
+    error=
+  AFTER  v=1808 bones=232 bp=232
+     new[224] NaNimate Leather Jacket_0 parent=NZK_NanimBuffer_0
+     new[225] NaNimate Leather Jacket_1 parent=NZK_NanimBuffer_1
+     new[226] NaNimate Leather Jacket_2 parent=NZK_NanimBuffer_2
+     new[227] NaNimate Leather Jacket_3 parent=NZK_NanimBuffer_3
+     new[228] NaNimate Leather Jacket_0 parent=NZK_NanimBuffer_0
+     new[229] NaNimate Leather Jacket_1 parent=NZK_NanimBuffer_1
+     new[230] NaNimate Leather Jacket_2 parent=NZK_NanimBuffer_2
+     new[231] NaNimate Leather Jacket_3 parent=NZK_NanimBuffer_3
+

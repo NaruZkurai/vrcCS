@@ -19,6 +19,16 @@ public struct Report
       public System.Int32 MeshesSkipped;
       /** Non-null when the pass could not proceed at all. */
       public System.String error;
+      /** One-line summary, so a ucli reflection call prints something readable
+       *  instead of the type name (`NZK.Core+MA+Report`). */
+      public override System.String ToString()
+      { return nameof(MeshesInspected) + "=" + MeshesInspected +
+               " " + nameof(MeshesRebuilt) + "=" + MeshesRebuilt +
+               " " + nameof(VerticesSplit) + "=" + VerticesSplit +
+               " " + nameof(BonesCreated) + "=" + BonesCreated +
+               " " + nameof(BuffersCreated) + "=" + BuffersCreated +
+               " " + nameof(MeshesSkipped) + "=" + MeshesSkipped +
+               " error=" + (error ?? ""); }
     }
 }
 }

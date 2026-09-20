@@ -1,0 +1,17 @@
+MISS   shape='Heels' norm='heels'
+MISS   shape='Socks' norm='socks'
+MISS   shape='Sneakers' norm='sneakers'
+MISS   shape='Elbow Pads' norm='elbow pads'
+MISS   shape='Garter' norm='garter'
+MISS   shape='Garters' norm='garters'
+MISS   shape='Tactical Pants' norm='tactical pants'
+MATCH  shape='Jeans' -> bone='NaNimate Jeans'
+MISS   shape='Shorts' norm='shorts'
+MATCH  shape='Skirt' -> bone='NaNimate Skirt'
+MISS   shape='Star Bodysuit' norm='star bodysuit'
+MATCH  shape='Bodysuit' -> bone='NaNimate Bodysuit'
+MISS   shape='Heeled Boots' norm='heeled boots'
+MATCH  shape='NaNimate Stockings' -> bone='NaNimate Stockings'
+MATCH  shape='NaNimate Leather Jacket' -> bone='NaNimate Leather Jacket'
+matched=5 unmatched=10
+
