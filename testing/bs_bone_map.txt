@@ -1,0 +1,57 @@
+=== NaNimation bones (38) ===
+  BONE NaNimate Body - Rings
+  BONE NaNimate Body Piercings
+  BONE NaNimate Bodysuit
+  BONE NaNimate Bra
+  BONE NaNimate Corset
+  BONE NaNimate Crop Top
+  BONE NaNimate Full BodySuit
+  BONE NaNimate Glasses
+  BONE NaNimate GRC
+  BONE NaNImate GRC chains
+  BONE NaNimate Halo
+  BONE NaNimate Hand Harness
+  BONE Nanimate Inner Neckace
+  BONE Nanimate internal Necklace
+  BONE NaNimate Jeans
+  BONE NaNimate Leather Jacket
+  BONE NaNimate Lip Piercings
+  BONE NaNimate Nails Extras
+  BONE NaNimate Nails Hands
+  BONE NaNimate Nails Toes
+  BONE Nanimate necklaces
+  BONE NaNimate Nocturn
+  BONE NaNimate Nut Mouth
+  BONE NaNimate Outer Necklace
+  BONE NaNimate Pads_K+E
+  BONE NaNimate Panties
+  BONE Nanimate Pet Necklace
+  BONE Nanimate Piercings
+  BONE NaNimate Pose Board
+  BONE NaNimate RealPP
+  BONE NaNimate Skirt
+  BONE NaNimate Spiked Choker
+  BONE NaNimate Stockings
+  BONE NaNimate Tank Top
+  BONE NaNimations.008
+  BONE NaNimations.009
+  BONE NaNimations.010
+  BONE Pose Board
+=== blendshapes (16) ===
+  SHAPE Bodysuit
+  SHAPE Elbow Pads
+  SHAPE Garter
+  SHAPE Garters
+  SHAPE Heeled Boots
+  SHAPE Heels
+  SHAPE Jeans
+  SHAPE Long Sleeves Jacket
+  SHAPE NaNimate Stockings
+  SHAPE Shorts
+  SHAPE Skirt
+  SHAPE Sneakers
+  SHAPE Socks
+  SHAPE Star Bodysuit
+  SHAPE Tactical Pants
+  SHAPE Tech Jacket
+

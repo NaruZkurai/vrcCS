@@ -1,0 +1,74 @@
+#if UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core
+{
+public static partial class NZKNaNimateWeightNormalizer {
+public sealed class Result{
+        public bool success;
+        public string error;
+        public int meshesProcessed;
+        public int meshesWritten;
+        public int renderersProcessed;
+        /* Vertices where at least one NaNimate influence was pinned. */
+        public long verticesAffected;
+        /* Vertices whose ordinary weights were rescaled. */
+        public long verticesRescaled;
+        /* Vertices holding only NaNimate influences (cannot sum to 1). */
+        public long verticesNaNimateOnly;
+        /* Bones referenced by weights but absent from the name list. */
+        public long outOfRangeBoneRefs;
+        /*
+         * Rescaled weights that came out NaN/Infinity/negative and were
+         * zeroed. Non-zero here means the input mesh had degenerate weights;
+         * Unity would otherwise report "Invalid AABB".
+         */
+        public long nonFiniteScales;
+        /* Largest observed |sum(weights) - 1| after rewriting. */
+        public float worstDeviation;
+        public long approxBytesBefore;
+        public long approxBytesAfter;
+        /** Meshes whose bindposes array was LONGER than the renderer's bone array
+         *  and got truncated.  Each one is a mesh that was producing NaN vertices
+         *  before the fix: a bindpose with no matching bone yields a malformed
+         *  skinning matrix, and the GPU discards the triangles that use it.
+         *  Counted rather than merely fixed because a non-zero value here is the
+         *  direct explanation for "part of the mesh is invisible". */
+        public int bindPosesTrimmed;
+        /** Meshes whose bindposes array was SHORTER than the bone array and got
+         *  identity-padded.  A different fault with the same symptom class: the
+         *  missing entries resolve to identity, collapsing the vertices that use
+         *  them. */
+        public int bindPosesPadded;
+        /** Meshes whose bind poses could not be aligned because the mesh is not
+         *  readable.  A non-zero value here means the NaN-vertex fault survives
+         *  on those meshes and the model needs Read/Write Enabled. */
+        public int bindPoseUnreadable;
+        /** Meshes whose repair was applied to an IN-MEMORY mesh that was never
+         *  written to the AssetDatabase.
+         *
+         *  This is the normal value in the in-memory path and it is the whole
+         *  point of that path: the repaired mesh is attached to the renderer and
+         *  serialised only when the SCENE is saved, so no asset is written, no
+         *  importer runs, and no postprocess callback fires.  A run that reports
+         *  meshesWritten > 0 is a run that paid the full asset-pipeline cost. */
+        public int meshesRepairedInMemory;
+        /** Renderers that were marked dirty so the repaired mesh is serialised
+         *  with the scene.  Writing `renderer.sharedMesh` does NOT dirty a scene
+         *  on its own, and a scene that is not dirty is not saved - so without
+         *  this the repair is present in memory, looks correct, and is silently
+         *  lost on the next load. */
+        public int meshesDirtied;
+        /** True when this pass performed NO AssetDatabase write at all.
+         *
+         *  A caller can assert on this to prove the pipeline stayed in memory -
+         *  which matters because the failure mode it guards against is not an
+         *  error, it is a silent 30-second reimport that looks like success. */
+        public bool didNotTouchAssetDatabase;
+        public bool HasWarning=>NZK.B.Oll4(verticesNaNimateOnly>0,outOfRangeBoneRefs>0,nonFiniteScales>0,worstDeviation>1e-3f);
+    }
+}
+}
+}
+}
+#endif
