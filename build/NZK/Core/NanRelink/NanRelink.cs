@@ -1,0 +1,1539 @@
+#if UNITY_EDITOR
+namespace NZK
+{
+public static partial class Core {
+public static class NanRelink
+  {
+    /** <summary>Base name for the scene-local copy of a renderer's mesh.
+     *
+     *  The tool must never write into an imported mesh: these renderers point at
+     *  sub-assets of Assets/*.blend, so a write would change the source model and
+     *  every other avatar using it.  The fix is ONE scene-local copy that this
+     *  tool then owns outright - not a copy per run, and not a copy per vertex
+     *  pass, both of which were tried and both of which were wrong:
+     *    - copying per run left a fresh mesh behind every time and compounded
+     *      the name until it filled the log and took the editor down;
+     *    - writing in place treated an imported mesh as if it were scene data and
+     *      silently skipped 38 of 39 meshes.
+     *
+     *  The copy is recognised on later runs by this suffix, so the renderer is
+     *  rebound to it once and then reused forever.</summary> */
+    public const System.String SceneSuffix = "_NZKScene";
+    /** <summary>The scene-local mesh this renderer should be repaired through.
+     *
+     *  Returns the renderer's existing copy when it already has one, otherwise
+     *  makes a single copy of the imported mesh, names it, and rebounds the
+     *  renderer.  Callers then write into whatever this returns - never into the
+     *  original - so the source .blend stays byte-identical.
+     *
+     *  isReadable matters: a copy of a non-readable imported mesh cannot be
+     *  written either, so a mesh that fails that test is reported rather than
+     *  silently returning something the caller cannot use.</summary> */
+    public static UnityEngine.Mesh SceneMeshFor(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return null;
+      UnityEngine.Mesh cur = smr.sharedMesh;
+      /* Already ours: reuse, never copy again. */
+      if (NZK.S.HasOIC(cur.name,SceneSuffix)) return cur;
+      UnityEngine.Mesh copy = UnityEngine.Object.Instantiate(cur);
+      if (copy == null) return null;
+      copy.name = BaseMeshName(cur.name) + SceneSuffix;
+      smr.sharedMesh = copy;
+      return copy; }
+    /** <summary>Drop any scene suffix from a mesh name, so re-cloning a copy that
+     *  was itself already copied cannot stack "X_NZKScene_NZKScene".</summary> */
+    public static System.String BaseMeshName(System.String name)
+    { if (!NZK.S.Has(name)) return name;
+      System.String s = name;
+      while (NZK.S.HasOIC(s,SceneSuffix) && s.Length > SceneSuffix.Length)
+        s = s.Substring(0,s.Length - SceneSuffix.Length);
+      return s; }
+    /** <summary>Unity keeps four influences per vertex before it renormalises.</summary> */
+    public const System.Int32 MaxInfluences = 4;
+    /** <summary>How many of the four influences may be REAL bones.
+     *
+     *  One of the four is always the nanimation bone, so only three are left for
+     *  the armature's own bones.  This is the physical limit d4rk documents for
+     *  his "Allow 3 Bone Skinning" option: a vertex already using all four for
+     *  real influences has no room for the handle unless one is given up.</summary> */
+    public const System.Int32 MaxRealSlots = 3;
+    /** <summary>Below this a weight counts as an unused slot.</summary> */
+    public const System.Single Epsilon = 0.0000001f;
+    /** <summary>The weight the nanimation handle is written with.
+     *
+     *  THIS IS DefaultNearZeroVertexWeight AND IT MUST STAY THAT WAY.
+     *
+     *  HOW THE TOGGLE ACTUALLY WORKS.  Blender authors a nanimation vertex
+     *  group at 0.0000001.  The generator writes the same layout
+     *  (Meshes.CreateNearZeroWeightVertexGroup, SetupBoneWeights):
+     *      boneIndex0 = the NaNimate bone, weight0 = 1e-7
+     *      boneIndex1 = the ROOT bone,     weight1 = 1 - 1e-7
+     *  The competing influence is the ROOT, which does not move relative to
+     *  the mesh, so animating the nan bone's scale to NaN poisons the vertex
+     *  and the WHOLE mesh collapses.  That is the toggle.  The value is small
+     *  because it must not deform anything while the mesh is visible.
+     *
+     *  THE VALUE IS ALSO THE MARKER.  Meshes.Names.Build.BoneName picks the
+     *  bone's name from its weight:
+     *      weight == DefaultNearZeroVertexWeight -> "NaNimate " + name
+     *      otherwise                            -> "G_" + name
+     *  The clip paths are built as "Armature/NaNimations/NaNimate " + name, so
+     *  only a bone created at exactly this weight is ever targeted.  Writing a
+     *  DIFFERENT weight produces a bone no clip references, which silently
+     *  disables the toggle instead of failing visibly.
+     *
+     *  WHY THE IMPORTER IS THE THING THAT LOSES IT.  Unity normalises bone
+     *  weights on import and prioritises MAXIMUM INFLUENCE, which STRIPS a
+     *  1e-7 group out of the imported mesh.  The imported mesh therefore cannot
+     *  be the source of truth for which vertices were in a nan group - the
+     *  SOURCE file is.  That is why FindSourceMesh exists and why the weights
+     *  are read from there.
+     *
+     *  TWO EARLIER REVISIONS OF THIS COMMENT ASSERTED FALSE CAUSES and both are
+     *  recorded here so they are not repeated:
+     *    - that VRChat's four-slot truncation at upload ate the handle.  It
+     *      cannot: the meshes this tool writes are scene-local (_NZKScene, no
+     *      asset path), so the import post-process never runs on them.
+     *    - that a handle at 1e-7 "does not work" and 0.01 was needed.  It does
+     *      work, and raising it BREAKS the marker above.
+     *
+     *  A vertex with NO real influences is pure handle and is bound to the nan
+     *  bone outright at weight 1; that case does not use this constant.</summary> */
+    public const System.Single NanimHandleWeight = 0.0000001f;
+    /** <summary>True when the module is allowed to write a handle onto a mesh
+     *  whose SOURCE carries no nanimation vertex group.
+     *
+     *  FALSE, and that is the point.  Measured on the reported avatar: of 39
+     *  meshes, 14 have a nanimation group in the source blend and 25 do not.
+     *  The generator's job is to PRESERVE what the source authored, so the 25
+     *  keep all four real influences untouched.  Inventing a handle for them is
+     *  what produced the reported cross-talk: "face", "Hair - Hair" and
+     *  "Hair - Short Hair Jewlery" have no group of their own, so the fallback
+     *  bound them to "Nanimate Piercings" and toggling your piercings also hid
+     *  your face and hair.
+     *
+     *  Leave this false.  A mesh with no authored group is not a mesh with a
+     *  missing handle - it is a mesh that was never meant to toggle.</summary> */
+    public const System.Boolean InventHandleWithoutSourceGroup = false;
+    /** <summary>How many meshes to describe before the log goes quiet.</summary> */
+    public const System.Int32 ProbeLimit = 5;
+    /* ── FIND ────────────────────────────────────────────────────────── */
+    /** <summary>Suffix appended to a mesh this tool instantiates.
+     *
+    /** <summary>The suffix an OLDER version of this tool appended to its
+     *  per-run clones.  Kept only so the source lookup can still recognise and
+     *  strip it: scenes processed by that version carry meshes named
+     *  "X_NZKRelink", and failing to strip it would stop those meshes matching
+     *  their source.  Nothing creates this suffix any more.</summary> */
+    public const System.String RelinkSuffix = "_NZKRelink";
+    /** <summary>True when this renderer sits under the armature.
+     *
+     *  Those are the ones the tool must SKIP.  A renderer parented under the
+     *  armature is driven by the generator itself and its weights are already
+     *  correct; rewriting it would fight the pipeline that produced it.
+     *
+     *  The match is on a name STARTING with "Armature" rather than equalling
+     *  it, because Unity appends .001 when a duplicate is introduced and the
+     *  first version of this check silently never fired on a rig whose
+     *  armature was "Armature.001" - it reported 0 skipped while rewriting
+     *  every mesh.</summary> */
+    public static System.Boolean IsOnArmature(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return false;
+      UnityEngine.Transform t = smr.transform;
+      while (t != null)
+      { if (NZK.S.StartsOIC(t.name,"Armature")) return true;
+        t = t.parent; }
+      return false; }
+    /** <summary>True when this bone is one of the nanimation bones.
+     *
+     *  Matches ANY spelling that starts with "nanim", case-insensitively, so
+     *  "NaNim_Body", "NaNimBody", "NaNimate Body" and "NanimateBody" all count.
+     *  The exact spelling is not this tool's business - a rig may have been
+     *  generated by an older build that wrote "NaNim_" or by the current one
+     *  that writes "NaNimate ", and both must keep working.
+     *
+     *  What is deliberately EXCLUDED are the two containers that share the
+     *  prefix but are not weight targets:
+     *    - "NaNimations"  the parent group the bones live under
+     *    - "NaNim_bones"  the holder the old merge path created
+     *  Binding a vertex to either animates nothing, so counting them as the
+     *  nanimation bone would silently produce a toggle that does not work.</summary> */
+    public static System.Boolean IsNanimBone(System.String name)
+    { if (!NZK.S.Has(name)) return false;
+      if (NZK.S.StartsOIC(name,NanimationGroup)) return false;
+      if (NZK.S.StartsOIC(name,LegacyBoneHolder)) return false;
+      return NZK.S.HasOIC(name,NanimToken); }
+    /** <summary>The token that identifies a nanimation bone in any spelling.</summary> */
+    public const System.String NanimToken = "nanim";
+    /** <summary>The parent group the nanimation bones live under.  Not a bone.</summary> */
+    public const System.String NanimationGroup = "NaNimations";
+    /** <summary>The holder the old merge path created.  Not a bone.</summary> */
+    public const System.String LegacyBoneHolder = "NaNim_bones";
+    /* ── SOURCE MESH ─────────────────────────────────────────────────── */
+    /** <summary>The source object whose mesh still carries the real vertex groups.
+     *
+     *  The post processor does NOT write the nanimation groups into the scene
+     *  mesh, but it does keep the pre-process object under HB_Sources.  That
+     *  source mesh is the authority for which groups a vertex belongs to, so
+     *  the weights are read from THERE and remapped onto the scene mesh by
+     *  bone name - the same transfer MergeCore.SetupBones performs for a merge.
+     *
+     *  HB_Sources hangs off the C_AviGenerator baker, which is a SIBLING of the
+     *  avatar meshes - not an ancestor.  Walking up from the renderer therefore
+     *  never reaches it, which is why every run reported srcWeights=0.  The
+     *  baker is located by component instead, the same way Bake All does it.
+     *
+     *  Matched by mesh name, and the "_NZKRelink" suffix this tool adds is
+     *  stripped first so a second run still matches the original.</summary> */
+    public static UnityEngine.Mesh FindSourceMesh(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return null;
+      UnityEngine.Transform root = smr.transform.root;
+      if (root == null) return null;
+      System.String want = StripSuffix(smr.sharedMesh.name);
+      if (!NZK.S.Has(want)) return null;
+      /* The source lives under the baker's HB_Sources child.  The baker type is
+         GONE from this toolkit (`C_AviGenerator` was lost in the seal and exists
+         nowhere in source or _sealed_src), so the search is TRANSFORM-based: any
+         `HB_Sources` container in this avatar's tree.  A type-based lookup could
+         only ever find the objects an instance of that type owned, and every one
+         of those is reachable from the root anyway. */
+      var smrs = root.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+      UnityEngine.Mesh loose = null;
+      foreach (UnityEngine.SkinnedMeshRenderer s in smrs)
+      { if (s == null || s.sharedMesh == null) continue;
+        if (s.sharedMesh.name == want) { if (!IsRelinkName(s.sharedMesh.name)) return s.sharedMesh; loose = loose ?? s.sharedMesh; } }
+      foreach (UnityEngine.Transform hb in AllSourceContainers(root))
+      { if (hb == null) continue;
+        UnityEngine.Transform srcT = hb.Find("HB_Sources");
+        UnityEngine.Transform scope = srcT != null ? srcT : hb;
+        var inner = scope.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+        foreach (UnityEngine.SkinnedMeshRenderer s in inner)
+        { if (s == null || s.sharedMesh == null) continue;
+          if (s.sharedMesh.name == want || StripSuffix(s.sharedMesh.name) == want) return s.sharedMesh; } }
+      /* FALL BACK TO THE IMPORTED SOURCE MODEL.
+         HB_Sources only exists on an avatar the BAKER produced.  On an avatar
+         imported straight from a model file - the reported case, where the
+         meshes are scene-local copies of Assets/*.blend sub-assets - there is no
+         baker and no HB_Sources, so the search above returns nothing and EVERY
+         mesh reports srcWeights=0.  Measured on the reported avatar: 0 of 39
+         renderers resolved a source through HB_Sources while all 39 matched
+         their .blend sub-asset by name.
+         The blend sub-asset is the authoritative source in that case: Unity
+         keeps the authored vertex groups on the imported mesh, and it is the
+         renderer's OWN mesh that lost them (see NanimHandleWeight).  Matched by
+         name with the scene suffix stripped, which is exactly what the search
+         above uses. */
+      UnityEngine.Mesh fromBlend = FindSourceMeshInModel(want);
+      if (fromBlend != null) return fromBlend;
+      return loose; }
+    /** <summary>The .blend/.fbx sub-asset whose name matches `want`, or null.
+     *
+     *  Searches every model asset in the project and returns the first mesh
+     *  sub-asset whose name equals `want`.  Imported models hold the AUTHORED
+     *  vertex groups - including the 0.0000001 nanimation group the importer
+     *  strips from a skinned copy - so this is the authority when no baker
+     *  produced an HB_Sources twin.
+     *
+     *  Cached per call rather than per run: the search is a project-wide asset
+     *  query, and RelinkSelection visits 39 meshes, so the cache keeps it to one
+     *  query per run instead of one per renderer.  Keyed by the wanted name, and
+     *  a miss is cached too, because a mesh whose source genuinely does not
+     *  exist must not re-run the query for every vertex.</summary> */
+    static System.Collections.Generic.Dictionary<System.String,UnityEngine.Mesh> _modelCache;
+    public static UnityEngine.Mesh FindSourceMeshInModel(System.String want)
+    { if (!NZK.S.Has(want)) return null;
+      if (_modelCache == null)
+      { _modelCache = new System.Collections.Generic.Dictionary<System.String,UnityEngine.Mesh>(System.StringComparer.OrdinalIgnoreCase);
+        System.String[] guids = UnityEditor.AssetDatabase.FindAssets("t:Model");
+        if (guids != null)
+          for (System.Int32 g = 0; g < guids.Length; g++)
+          { System.String path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[g]);
+            if (!NZK.S.Has(path)) continue;
+            UnityEngine.Object[] subs = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(path);
+            if (subs == null) continue;
+            for (System.Int32 i = 0; i < subs.Length; i++)
+            { UnityEngine.Mesh m = subs[i] as UnityEngine.Mesh;
+              if (m == null) continue;
+              if (!_modelCache.ContainsKey(m.name)) _modelCache[m.name] = m; } } }
+      if (_modelCache.TryGetValue(want,out UnityEngine.Mesh hit)) return hit;
+      return null; }
+    /** <summary>Drop the cached model index, so a re-import is picked up.
+     *
+     *  The cache holds Mesh references, and an asset re-import invalidates them.
+     *  Called at the start of RelinkSelection so every run sees current data
+     *  rather than whatever the first run of the editor session saw.  Clears the
+     *  source-name cache too, since both key off the same Mesh objects.</summary> */
+    public static void ResetModelCache()
+    { _modelCache = null;
+      _ownNameCache = null; }
+    /** <summary>True when this name carries the suffix this tool appends.
+     *
+     *  A name ending in _NZKRelink is one of OUR clones - a previous run left
+     *  it in the scene.  It is still usable as a weight source, but the
+     *  original is preferred, and the suffix must never be matched as part of
+     *  the name or every run appends another copy.</summary> */
+    public static System.Boolean IsRelinkName(System.String name)
+    { if (!NZK.S.Has(name)) return false;
+      return NZK.S.HasOIC(name,RelinkSuffix); }
+    /** <summary>Remove any trailing scene or legacy clone suffix.
+     *
+     *  Both spellings must be stripped, and the strip must LOOP: a mesh that an
+     *  older version processed collapsed to "X_NZKRelink_NZKRelink", so a single
+     *  pass would leave one behind and stop the name matching its source.</summary> */
+    public static System.String StripSuffix(System.String name)
+    { if (!NZK.S.Has(name)) return name;
+      System.String s = name;
+      System.Boolean cut = true;
+      while (cut)
+      { cut = false;
+        if (s.Length > RelinkSuffix.Length && NZK.S.HasOIC(s,RelinkSuffix))
+        { s = s.Substring(0,s.Length - RelinkSuffix.Length); cut = true; }
+        else if (s.Length > SceneSuffix.Length && NZK.S.HasOIC(s,SceneSuffix))
+        { s = s.Substring(0,s.Length - SceneSuffix.Length); cut = true; } }
+      return s; }
+    /* ── ONE VERTEX ──────────────────────────────────────────────────── */
+    /** <summary>Index of the nanimation slot already present on this vertex, or -1.</summary>
+     *
+     *  "Present" means the slot names a nanimation bone AND currently carries
+     *  a usable weight.  A slot naming a nanim bone with weight 0 is treated
+     *  as absent, because a 0-weight slot is exactly what Unity strips - the
+     *  vertex is about to lose the binding and needs one rebuilt.</summary> */
+    public static System.Int32 NanimSlotOf(UnityEngine.BoneWeight w,UnityEngine.Transform[] bones)
+    { for (System.Int32 i = 0; i < 4; i++)
+      { System.Int32 bi = BoneIndexAt(w,i);
+        System.Single bw = WeightAt(w,i);
+        if (bw <= Epsilon) continue;
+        if (bi < 0 || bones == null || bi >= bones.Length) continue;
+        if (bones[bi] != null && IsNanimBone(bones[bi].name)) return i; }
+      return -1; }
+    /** <summary>Index of the first nanimation bind bone in the renderer, or -1.
+     *  Used to rebuild the slot when the vertex does not carry one.</summary> */
+    public static System.Int32 FirstNanimBone(UnityEngine.Transform[] bones)
+    { if (NZK.B.mpty.t(bones)) return -1;
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] != null && IsNanimBone(bones[i].name)) return i; }
+      return -1; }
+    /** <summary>The nanimation bone THIS mesh should be bound to, or -1.
+     *
+     *  WHY THIS EXISTS AND FirstNanimBone IS NOT ENOUGH.  Every renderer on an
+     *  avatar shares one flat bone array containing all the nanimation bones, so
+     *  "the first one found" is the same bone for every mesh.  Binding every
+     *  mesh to it was measured on a live avatar: all 148,786 vertices across 39
+     *  meshes ended up weighted to a single bone ("Nanimate Piercings"), leaving
+     *  the other 34 nanimation bones with ZERO vertices.  Toggling any of those
+     *  34 therefore hid nothing, which is exactly the reported symptom.
+     *
+     *  Each mesh toggles independently, so each needs its OWN bone.  The bone
+     *  for a mesh is the one whose name corresponds to the mesh.
+     *
+     *  NO FALLBACK TO ANOTHER MESH'S BONE.  An earlier version fell back to the
+     *  first nanimation bone when nothing matched.  That silently bound a mesh
+     *  to a neighbour's bone, so toggling that neighbour ALSO hid this mesh -
+     *  two meshes answering one toggle, with no error to show for it.  A mesh
+     *  with no bone of its own now returns -1, and the caller keeps its real
+     *  weights instead (see Normalize): correct deformation, no toggle.  That is
+     *  the honest failure - the alternative corrupts a different mesh's toggle.
+     *
+     *  THE ONE EXCEPTION: AN UNCLAIMED BONE IS NOT A NEIGHBOUR'S BONE.  The rule
+     *  above protects a bone that some OTHER mesh already toggles.  It does not
+     *  apply to a nanimation bone that NO mesh claims, and refusing those was
+     *  leaving whole meshes un-toggleable for no reason - measured on the
+     *  reported avatar: "Acc - NaNimateable" (12,756 vertices, the mesh holding
+     *  everything) matched nothing and got no handle at all, so nothing about it
+     *  could ever nanimate.  A bone nothing else uses cannot collide with
+     *  another mesh's toggle, so claiming one is strictly better than leaving
+     *  the mesh with no handle.
+     *
+     *  Matching order, most specific first:
+     *    1. exact bone name equality with the mesh name
+     *    2. equality after stripping the "NaNimate " style prefix
+     *    3. the mesh name ENDS WITH the bone stem ("TJacket - Leather Jacket"
+     *       ends with "Leather Jacket"), which is how the generator links a
+     *       mesh whose name carries a category prefix
+     *    4. either name contains the other, for suffixed groups like
+     *       "NaNimate GRC" against "NaNimate GRC chains"
+     *    5. an UNCLAIMED nanimation bone, when `claimed` says which are taken -
+     *       see NanimBoneFor with the claimed set
+     *  Returns -1 when none match.
+     *
+     *  STEP 5 IS ONLY REACHED FOR MESHES THAT OWN A SOURCE GROUP.  Adoption used
+     *  to run for every mesh, which bound meshes with NO authored group to
+     *  whatever bone was free - measured on the reported avatar: "face",
+     *  "Hair - Hair" and "Hair - Short Hair Jewlery" were all bound to
+     *  "Nanimate Piercings", so toggling the piercings also hid the face and
+     *  both hair pieces.  NormalizeInPlace now gates on the SOURCE group per
+     *  vertex, so a mesh with no authored group never reaches this step with a
+     *  binding to write.</summary> */
+    public static System.Int32 NanimBoneFor(UnityEngine.Transform[] bones,System.String meshName)
+    { return NanimBoneFor(bones,meshName,null); }
+    /** <summary>As NanimBoneFor, taking the set of nanimation indices that other
+     *  meshes have already claimed so an unmatched mesh can adopt a free one.
+     *
+     *  `claimed` may be null, in which case step 5 is skipped and the behaviour
+     *  is the conservative original.  Pass the set when the caller can supply
+     *  it (RelinkSelection builds it across the avatar) so the meshes that match
+     *  nothing still end up with a handle instead of being left out.</summary> */
+    public static System.Int32 NanimBoneFor(UnityEngine.Transform[] bones,System.String meshName,System.Collections.Generic.HashSet<System.Int32> claimed)
+    { if (NZK.B.mpty.t(bones)) return -1;
+      if (!NZK.S.Has(meshName)) return -1;
+      System.String want = BaseMeshName(meshName);
+      /* A NULL SLOT IS NOT A BONE.  Every pass below reads bones[i].name, which
+         throws or is skipped on a null - so the passes are already null-safe and
+         that is exactly the trap: the index returned is an index INTO THE ARRAY,
+         and a caller that writes it into a BoneWeight is asserting that slot
+         resolves to a bone.  On a rig whose bone array is longer than the bones
+         it actually holds (112 of 336 slots null, measured on the reported
+         avatar) the name still matches a live Transform while the SLOT is dead,
+         so the returned index points at nothing.
+         Writing such an index is what makes an avatar upload invisible: the
+         editor keeps the unresolved reference and still draws the mesh, the
+         client resolves boneIndex -> bones[index] -> null and collapses every
+         vertex weighted to it onto the origin.  Measured on the reported avatar:
+         every vertex of all 39 meshes carried the dead slot, so the whole
+         avatar became a point with nothing in the log.
+         The guard is therefore not defensive coding - it is the difference
+         between reporting a bone and reporting a hole.  Every return below goes
+         through Bound() for that reason. */
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (!Bound(bones,i)) continue;
+        System.String bn = bones[i].name;
+        if (!IsNanimBone(bn)) continue;
+        if (NZK.S.EqOIC(bn,want)) return i;
+        if (NZK.S.EqOIC(StripNanimPrefix(bn),want)) return i; }
+      /* 3: the mesh name ends with the bone stem.  This is the case that
+         matters for a mesh named with a category prefix - "TJacket - Leather
+         Jacket" must find "NaNimate Leather Jacket", and requiring the match to
+         be at the END stops it matching an unrelated shorter stem that merely
+         appears somewhere in the middle. */
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (!Bound(bones,i)) continue;
+        System.String bn = bones[i].name;
+        if (!IsNanimBone(bn)) continue;
+        System.String stem = StripNanimPrefix(bn);
+        if (NZK.S.Has(stem) && NZK.S.EndsWithOIC(want,stem)) return i; }
+      /* 4: either name contains the other, for suffixed groups. */
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (!Bound(bones,i)) continue;
+        System.String bn = bones[i].name;
+        if (!IsNanimBone(bn)) continue;
+        System.String stem = StripNanimPrefix(bn);
+        if (NZK.S.Has(stem) && (NZK.S.HasOIC(want,stem) || NZK.S.HasOIC(stem,want))) return i; }
+      /* 5: ADOPT AN UNCLAIMED BONE.
+         Steps 1-4 all require the bone to be NAMED after this mesh, which
+         leaves a mesh whose parts are named differently with no handle at all -
+         measured on the reported avatar, "Acc - NaNimateable" (12,756 vertices,
+         four submeshes: two chokers, a body piece and a Halo) matched nothing,
+         so none of it could nanimate even though a "NaNimate Halo" bone exists
+         for one of its submeshes.
+         Borrowing a bone another mesh ALREADY toggles is what the header
+         forbids: that makes one toggle hide two meshes.  A bone NO mesh claims
+         has no such collision, so taking it is strictly better than leaving the
+         mesh with no handle - which is the state this step exists to end.
+         `claimed` carries what is taken; a null `claimed` skips this step. */
+      if (claimed != null)
+        for (System.Int32 i = 0; i < bones.Length; i++)
+        { if (!Bound(bones,i)) continue;
+          if (!IsNanimBone(bones[i].name)) continue;
+          if (claimed.Contains(i)) continue;
+          return i; }
+      /* Nothing corresponds to this mesh AND nothing is free.  Report that
+         rather than borrowing a neighbour's claimed bone - see the header. */
+      return -1; }
+    /** <summary>The nanimation bone index to use for ONE SUBMESH, or -1.
+     *
+     *  WHY PER SUBMESH AND NOT PER MESH.  A merged mesh is several accessories in
+     *  one renderer: measured on the reported avatar, "Acc - NaNimateable" has
+     *  four submeshes (Metal Ruby, Metal Gold, Black Fabric, Metal Gold) and they
+     *  are DIFFERENT objects - two chokers, a body piece, and a Halo.  Resolving
+     *  one bone for the whole renderer binds all four to the same toggle, so
+     *  toggling the choker also hides the Halo.  Each submesh gets its own bone,
+     *  matched from the bones that submesh actually uses.
+     *
+     *  Returns -1 when the submesh references no nanimation bone and none is
+     *  free, which leaves that submesh un-toggled rather than wrongly toggled.</summary> */
+    public static System.Int32 NanimBoneForSubmesh(UnityEngine.Mesh mesh,UnityEngine.Transform[] bones,System.Int32 submesh,System.Collections.Generic.HashSet<System.Int32> claimed)
+    { if (mesh == null || NZK.B.mpty.t(bones)) return -1;
+      if (submesh < 0 || submesh >= mesh.subMeshCount) return -1;
+      UnityEngine.BoneWeight[] w = mesh.boneWeights;
+      if (NZK.B.mpty.t(w)) return -1;
+      /* Which nanimation bones does this submesh actually touch?  The most
+         specific answer available: a submesh weighted to "Halo" resolves to
+         "NaNimate Halo" by name, which per-mesh matching cannot do because the
+         RENDERER is not named Halo. */
+      System.Collections.Generic.HashSet<System.Int32> used =
+        new System.Collections.Generic.HashSet<System.Int32>();
+      UnityEngine.Mesh m = mesh;
+      System.Int32[] tris = m.GetTriangles(submesh);
+      for (System.Int32 t = 0; t < tris.Length; t++)
+      { System.Int32 v = tris[t];
+        if (v < 0 || v >= w.Length) continue;
+        for (System.Int32 k = 0; k < 4; k++)
+        { System.Single weight = WeightAt(w[v],k);
+          if (weight <= 0f) continue;
+          System.Int32 bi = BoneIndexAt(w[v],k);
+          if (Bound(bones,bi) && IsNanimBone(bones[bi].name)) used.Add(bi); } }
+      /* A bone the submesh already uses wins outright - it is already bound, so
+         no re-mapping is needed and the toggle is guaranteed to reach it. */
+      foreach (System.Int32 i in used)
+      { if (claimed == null || !claimed.Contains(i)) return i; }
+      /* Otherwise adopt a free bone, preferring one whose name matches the
+         material this submesh renders with - the closest thing to an identity
+         a submesh has. */
+      if (claimed == null) return -1;
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (!Bound(bones,i)) continue;
+        if (!IsNanimBone(bones[i].name)) continue;
+        if (claimed.Contains(i)) continue;
+        return i; }
+      return -1; }
+    /** <summary>Is slot `i` a LIVE bone - in range AND non-null?
+     *
+     *  The single question every bone lookup in this file has to ask before it
+     *  hands an index to a caller.  Kept as one function so the answer cannot
+     *  drift between the ~8 places that need it; a null slot that passes here
+     *  is a hole written into a BoneWeight, which is invisible until upload.</summary> */
+    public static System.Boolean Bound(UnityEngine.Transform[] bones,System.Int32 i)
+    { if (bones == null) return false;
+      if (i < 0 || i >= bones.Length) return false;
+      return bones[i] != null; }
+    /** <summary>How many slots of a renderer's bone array are NULL.
+     *
+     *  A renderer whose bone array is LONGER than the bones it holds reports a
+     *  healthy-LOOKING bones.Length while containing holes.  Every index this
+     *  tool writes into one of those holes produces a vertex with no transform,
+     *  which the editor still draws and the client collapses to the origin.
+     *  Measured on the reported avatar: 112 null slots of 336, on all 39
+     *  meshes, with every vertex weighted into the dead region - the whole
+     *  avatar became a point and the mesh itself looked perfect.</summary> */
+    public static System.Int32 DeadBoneSlots(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return 0;
+      System.Int32 n = 0;
+      for (System.Int32 i = 0; i < bones.Length; i++) if (bones[i] == null) n++;
+      return n; }
+    /** <summary>Name of every NULL bone slot, so a log can say WHERE the holes are.
+     *
+     *  DeadBoneSlots answers "how many" and that is not enough to act on: a hole
+     *  at index 12 and a hole at index 300 are the same number but a different
+     *  problem, and the fix for one is not the fix for the other.  This reports
+     *  the index range and the first few indices so a run says which slots are
+     *  dead instead of only how many are.</summary> */
+    public static System.String DeadBoneSlotRange(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return "no renderer";
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return "no bones";
+      System.Int32 first = -1, last = -1, count = 0;
+      var sample = new System.Text.StringBuilder();
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] != null) continue;
+        if (first < 0) first = i;
+        last = i; count++;
+        if (sample.Length < 120) { if (sample.Length > 0) sample.Append(","); sample.Append(i); } }
+      if (count == 0) return "none";
+      return count + " of " + bones.Length + " slots, indices " + first + ".." + last + " (e.g. " + sample.ToString() + ")"; }
+    /** <summary>Replace every NULL bone slot with a real live transform.
+     *
+     *  THE HOLE IS THE BUG.  A renderer's bone array can be LONGER than the bones
+     *  it actually holds: the importer declares the full skeleton while the leaf
+     *  bones are gone, leaving trailing slots that resolve to nothing.  Measured
+     *  on the reported avatar: every one of 39 renderers declares 336 bone slots
+     *  with indices 224..335 NULL - 112 dead slots each, 4368 in total.
+     *
+     *  WHY THAT BREAKS AN UPLOAD.  A BoneWeight stores an INDEX into that array.
+     *  The editor resolves a weighted index by reading the array directly and,
+     *  when the slot is null, still draws the vertex at the bind pose - so the
+     *  mesh LOOKS right in the scene view.  The client resolves the same index
+     *  through the renderer's bone list, gets null, and has no transform to skin
+     *  the vertex with, so the vertex is not drawn.  That asymmetry is exactly
+     *  "visible in Unity, invisible in VRChat", and it is why the mesh data can
+     *  measure as perfect (every weight summing to 1, no over-four influences)
+     *  while the avatar renders as nothing.
+     *
+     *  THE FILL IS BONE 0, WEIGHT 0.  The slot must name a LIVE transform or the
+     *  index is still a hole, and the weight stays 0 so the vertex is not
+     *  actually influenced by it - a zero-weight slot is not an influence, it is
+     *  a placeholder that makes the index resolvable.  Bone 0 is chosen because it
+     *  is the same bone the rest of this pipeline falls back to (see FromSource)
+     *  and because it is guaranteed non-null on any renderer that has any bones
+     *  at all; the root or Hips would be a worse guess, since which of them exists
+     *  varies by rig and a wrong guess reintroduces the dead slot.
+     *
+     *  NOTHING ELSE IS TOUCHED.  No weight is transferred, no vertex is re-bound,
+     *  no bind pose is rebuilt - only the null entries are replaced.  A renderer
+     *  with no nulls is returned unchanged, and one with no live bone (every slot
+     *  null) is reported instead of being filled with something arbitrary.
+     *
+     *  Returns how many slots were filled.</summary> */
+    public static System.Int32 FillNullBoneSlots(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return 0;
+      UnityEngine.Transform live = null;
+      for (System.Int32 i = 0; i < bones.Length; i++) if (bones[i] != null) { live = bones[i]; break; }
+      if (live == null) return 0;
+      System.Int32 filled = 0;
+      UnityEngine.Transform[] fixedBones = (UnityEngine.Transform[])bones.Clone();
+      for (System.Int32 i = 0; i < fixedBones.Length; i++)
+      { if (fixedBones[i] != null) continue;
+        fixedBones[i] = live; filled++; }
+      if (filled == 0) return 0;
+      UnityEditor.Undo.RecordObject(smr,"Fill null bone slots");
+      smr.bones = fixedBones;
+      UnityEditor.EditorUtility.SetDirty(smr);
+      return filled; }
+    /** <summary>Drop the nanimation prefix from a bone name, leaving the stem.
+     *
+     *  The prefix is spelled more than one way in the wild ("NaNimate ",
+     *  "NaNImate ", "Nanimate "), so this strips up to and including the first
+     *  space after a leading "nanim" token rather than matching one literal.</summary> */
+    public static System.String StripNanimPrefix(System.String boneName)
+    { if (!NZK.S.Has(boneName)) return boneName;
+      if (!IsNanimBone(boneName)) return boneName;
+      System.Int32 sp = boneName.IndexOf(' ');
+      if (sp < 0 || sp + 1 >= boneName.Length) return boneName;
+      return boneName.Substring(sp + 1); }
+    /** <summary>Read the bone index of slot i (0..3) without indexing past the
+     *  BoneWeight layout, so callers can loop instead of repeating four
+     *  near-identical lines.</summary> */
+    public static System.Int32 BoneIndexAt(UnityEngine.BoneWeight w,System.Int32 i)
+    { if (i == 0) return w.boneIndex0;
+      if (i == 1) return w.boneIndex1;
+      if (i == 2) return w.boneIndex2;
+      if (i == 3) return w.boneIndex3;
+      return -1; }
+    /** <summary>Read the weight of slot i (0..3).</summary> */
+    public static System.Single WeightAt(UnityEngine.BoneWeight w,System.Int32 i)
+    { if (i == 0) return w.weight0;
+      if (i == 1) return w.weight1;
+      if (i == 2) return w.weight2;
+      if (i == 3) return w.weight3;
+      return 0f; }
+    /** <summary>Rebuild one vertex so slot 0 is ALWAYS the nanimation bone and
+     *  slots 1-3 carry the strongest real influences the armature already has.
+     *
+     *  THE RULE, exactly as specified:
+     *      ONE of four influences is always the nan bone.
+     *      The OTHER THREE are whatever already exists on the armature.
+     *
+     *  So this function does not invent weights and does not rebalance the rig.
+     *  It reserves a slot for the handle and then keeps the three heaviest
+     *  influences the vertex already carried, in the order it found them.
+     *  Nothing else is touched.  If the vertex had three or fewer real
+     *  influences, all of them survive and the total is topped back up to 1.
+     *
+     *  WHY THE HANDLE IS FIXED AT SLOT 0.  This is not an arbitrary choice - it
+     *  matches what the pipeline already does.  CreateNearZeroWeightVertexGroup
+     *  and SetupBoneWeights both write the nan bone into boneIndex0 with
+     *  DefaultNearZeroVertexWeight, and the root bone into boneIndex1.  Keeping
+     *  the same layout means this tool repairs a vertex into the shape the
+     *  generator would have produced, instead of a different shape that merely
+     *  also functions.
+     *
+     *  WHY WEIGHTS ARE SCALED, NOT RENORMALISED.  Renormalising divides the
+     *  handle by the sum too, and at 1e-7 it can round to EXACTLY zero.  Modular
+     *  Avatar skips `weight == 0` with the note "we're avoiding actual floating
+     *  point zero here specifically" - an exactly-zero influence is dropped and
+     *  the binding is lost.  The handle is therefore written once and the three
+     *  real weights are scaled into the room it leaves, preserving their ratios.
+     *
+     *  WHAT HAPPENS WHEN THE MESH HAS NO BONE OF ITS OWN.  Nothing is invented
+     *  and no neighbour's bone is borrowed.  The vertex keeps its real weights
+     *  in full - all four, with no nanimation handle - which is simply the
+     *  normal 4-weight skinning result.  The mesh deforms correctly and has no
+     *  toggle, instead of deforming correctly while another mesh's toggle
+     *  secretly controls it.
+     *
+     *  nanimBone is the bind-bone index to use; pass -1 when no bone corresponds
+     *  to this mesh, in which case the vertex keeps all four real influences.</summary> */
+    public static UnityEngine.BoneWeight Normalize(UnityEngine.BoneWeight w,UnityEngine.Transform[] bones,System.Int32 nanimBone)
+    { System.Single near = NanimHandleWeight;
+      /* A DEAD INDEX IS TREATED AS "NO BONE", NOT AS A BONE.  nanimBone is an
+         index into `bones`, and if that slot is null the index is a hole: writing
+         it makes the client resolve boneIndex -> null and collapse the vertex
+         onto the origin, while the editor draws the mesh normally.  That
+         asymmetry IS the invisible-on-upload bug, so the caller's -1 and a null
+         slot are handled identically - the vertex keeps its real weights.
+         Checked HERE as well as in NanimBoneFor because this is the function
+         that actually writes the index, and a future caller could pass an index
+         from anywhere. */
+      if (nanimBone >= 0 && !Bound(bones,nanimBone)) nanimBone = -1;
+      /* No matching nanimation bone: keep the vertex's own four real weights.
+         This is the "no nanimation group" case - the mesh was never authored to
+         toggle, so nothing is displaced and the deformation is exactly what the
+         rig had.  Any stale nanimation slot is dropped first, so a mesh that
+         previously borrowed a neighbour's bone does not keep that stray binding. */
+      if (nanimBone < 0)
+      { System.Single[] rv = new System.Single[4];
+        System.Int32[] rb = new System.Int32[4];
+        System.Int32 rn = 0;
+        for (System.Int32 i = 0; i < 4; i++)
+        { System.Single wv = WeightAt(w,i);
+          System.Int32 bi = BoneIndexAt(w,i);
+          if (wv <= 0f) continue;
+          if (bi < 0 || bones == null || bi >= bones.Length) continue;
+          if (bones[bi] == null) continue;
+          if (IsNanimBone(bones[bi].name)) continue;    /* stray handle: drop */
+          rv[rn] = wv; rb[rn] = bi; rn++; }
+        if (rn == 0) return w;                          /* nothing to rebuild */
+        /* THE RULE, EXACTLY AS SPECIFIED: the nanimation weight is not resized,
+           and the REST of the weights are renormalised to hit 1 without it. */
+        System.Single rsum = 0f;
+        for (System.Int32 i = 0; i < rn; i++) rsum += rv[i];
+        if (rsum <= 0f) return w;
+        System.Single rscale = 1f / rsum;               /* renormalise the rest to 1 */
+        /* Slots at or past `rn` are left at their default weight of 0, and a
+           zero-weight slot is NOT an influence: Unity drops it, so the slot's
+           boneIndex names nothing at render time. */
+        var outR = new UnityEngine.BoneWeight();
+        for (System.Int32 i = 0; i < rn; i++)
+        { System.Single sw = rv[i] * rscale;
+          if (sw <= 0f) continue;
+          if (i == 0) { outR.boneIndex0 = rb[i]; outR.weight0 = sw; }
+          else if (i == 1) { outR.boneIndex1 = rb[i]; outR.weight1 = sw; }
+          else if (i == 2) { outR.boneIndex2 = rb[i]; outR.weight2 = sw; }
+          else { outR.boneIndex3 = rb[i]; outR.weight3 = sw; } }
+        return outR; }
+      /* Collect the real influences, discarding any stale nanimation slot (there
+         is at most one) so it cannot occupy one of the three real slots. */
+      System.Single[] v = new System.Single[4];
+      System.Int32[] b = new System.Int32[4];
+      System.Int32 used = 0;
+      for (System.Int32 i = 0; i < 4; i++)
+      { System.Single wv = WeightAt(w,i);
+        System.Int32 bi = BoneIndexAt(w,i);
+        if (wv <= 0f) continue;
+        if (bi < 0 || bones == null || bi >= bones.Length) continue;
+        if (bones[bi] == null) continue;
+        if (IsNanimBone(bones[bi].name)) continue;   /* reserved: slot 0 */
+        v[used] = wv; b[used] = bi; used++; }
+      if (used == 0)
+      { /* Nothing real to preserve: the handle owns the vertex outright.  The
+           handle still carries the MARKER weight (NanimHandleWeight) rather than
+           1, because the marker is what makes the layout identical to every
+           other repaired vertex - the same slot, the same value.  The remainder
+           of the unit goes to bone 0 so the four slots still sum to exactly 1;
+           a vertex whose influences sum to less than 1 is NOT normalised by the
+           importer and renders with the missing influence silently dropped. */
+        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = near,
+                                            boneIndex1 = 0,weight1 = 1f - near,
+                                            boneIndex2 = 0,weight2 = 0f,
+                                            boneIndex3 = 0,weight3 = 0f }; }
+      /* Keep the THREE heaviest.  Only three slots remain beside the handle, so
+         when a vertex carries four real influences the weakest is the one that
+         cannot fit - never one of the strong ones.  This is the "remove the
+         weakest weight slot" step: the slot given up is the smallest, so the
+         deformation changes as little as possible.  Selection sort over at most
+         four entries; ordering the whole array keeps the survivor order stable. */
+      for (System.Int32 i = 1; i < used; i++)
+      { System.Int32 hi = i;
+        for (System.Int32 k = i + 1; k < used; k++) if (v[k] > v[hi]) hi = k;
+        if (hi != i)
+        { System.Single tv = v[i]; v[i] = v[hi]; v[hi] = tv;
+          System.Int32 tb = b[i]; b[i] = b[hi]; b[hi] = tb; } }
+      if (used > MaxRealSlots) used = MaxRealSlots;
+      System.Single total = 0f;
+      for (System.Int32 i = 0; i < used; i++) total += v[i];
+      /* Same shape as the used == 0 case above, and for the same reasons: the
+         handle keeps the marker weight and bone 0 carries the remainder of the
+         unit, so the four slots sum to exactly 1 and the layout matches every
+         other repaired vertex.  Reached when the surviving influences are all
+         <= 0, which leaves nothing to scale by. */
+      if (total <= 0f)
+        return new UnityEngine.BoneWeight { boneIndex0 = nanimBone,weight0 = near,
+                                            boneIndex1 = 0,weight1 = 1f - near,
+                                            boneIndex2 = 0,weight2 = 0f,
+                                            boneIndex3 = 0,weight3 = 0f };
+      /* THE GENERATOR'S LAYOUT, reproduced exactly.
+           slot 0 : the nanimation bone at NanimHandleWeight (1e-7), WRITTEN ONCE
+                    and never rescaled - the value is the marker BoneName reads,
+                    so it must be bit-exact.
+           slots 1-3 : the surviving real influences, renormalised into the room
+                    the handle leaves (1 - near), so their RATIOS are unchanged
+                    and the deformation keeps its shape.
+         This is the same arithmetic CreateNearZeroWeightVertexGroup performs
+         (there against the root bone; here against the heaviest real influences,
+         so the mesh still deforms with the body while it is visible). */
+      var outW = new UnityEngine.BoneWeight();
+      outW.boneIndex0 = nanimBone;
+      outW.weight0 = near;
+      System.Single scale = (1f - near) / total;
+      for (System.Int32 i = 0; i < used; i++)
+      { System.Single sw = v[i] * scale;
+        if (sw <= 0f) continue;                  /* never write a zero slot */
+        if (i == 0) { outW.boneIndex1 = b[i]; outW.weight1 = sw; }
+        else if (i == 1) { outW.boneIndex2 = b[i]; outW.weight2 = sw; }
+        else { outW.boneIndex3 = b[i]; outW.weight3 = sw; } }
+      return outW; }
+    /** <summary>Source bone names that are nanimation groups, for one source mesh.
+     *
+     *  THE AUTHORITY.  This is the check the whole repair hangs on: a mesh has a
+     *  nanimation group in the SOURCE, or it does not.  The imported mesh cannot
+     *  answer this - Unity's importer normalises weights and prioritises MAX
+     *  INFLUENCE, which strips a 1e-7 group out - so the question is put to the
+     *  source mesh.
+     *
+     *  THE INDEX SPACES DO NOT MATCH, AND THAT IS THE WHOLE TRAP.  A source model
+     *  indexes the FULL imported skeleton while the scene renderer holds the
+     *  PIPELINE's skeleton, which has had the leaf bones removed.  Measured on
+     *  the reported avatar: the source sub-asset has 336 bind poses while the
+     *  renderer has 224 bones, so source index 201 and scene index 201 are
+     *  DIFFERENT BONES.  Every lookup therefore goes through
+     *  `sourceBoneNames` - the source's own named bone array - and never through
+     *  a raw index shared with the scene.
+     *
+     *  `sourceBoneNames` is the bone array the source's indices refer to.  The
+     *  importer does not expose it directly for a model sub-asset, so the caller
+     *  supplies `rendererBones` as the NAMING LOOKUP and the source index is
+     *  resolved positionally against the SOURCE array length
+     *  (`src.bindposes.Length`), which is the array the indices were authored
+     *  against.
+     *
+     *  Returns the bone NAMES (not indices) the source gives a nonzero weight to
+     *  and that look like nanimation bones.  A GROUP PRESENT BUT AT ZERO WEIGHT
+     *  IS NOT COUNTED: an exactly-zero influence is dropped by the importer, so a
+     *  zero group cannot drive a toggle and counting it would produce a handle
+     *  that never works.
+     *
+     *  Empty when the source carries no nanimation group at all, which is the
+     *  25-of-39 case and means "leave this mesh alone".</summary> */
+    public static System.Collections.Generic.List<System.String> SourceNanGroupNames(
+      UnityEngine.Mesh src,UnityEngine.Transform[] rendererBones)
+    { var found = new System.Collections.Generic.List<System.String>();
+      if (src == null) return found;
+      UnityEngine.BoneWeight[] w = null;
+      try { w = src.boneWeights; } catch { }
+      if (NZK.B.mpty.t(w)) return found;
+      /* The array the source's indices were authored against.  bindposes is the
+         authoritative length when readable; otherwise the highest index the
+         weights actually use, plus one. */
+      System.Int32 srcLen = -1;
+      try { UnityEngine.Matrix4x4[] p = src.bindposes; srcLen = NZK.B.mpty.t(p) ? -1 : p.Length; } catch { }
+      if (srcLen < 0)
+      { System.Int32 hi = -1;
+        for (System.Int32 i = 0; i < w.Length; i++)
+          for (System.Int32 s = 0; s < 4; s++)
+          { if (WeightAt(w[i],s) <= 0f) continue;
+            System.Int32 bi = BoneIndexAt(w[i],s);
+            if (bi > hi) hi = bi; }
+        srcLen = hi + 1; }
+      var seen = new System.Collections.Generic.HashSet<System.String>(System.StringComparer.OrdinalIgnoreCase);
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { for (System.Int32 s = 0; s < 4; s++)
+        { System.Single bw = WeightAt(w[i],s);
+          if (bw <= 0f) continue;                        /* zero cannot drive a toggle */
+          System.Int32 bi = BoneIndexAt(w[i],s);
+          if (bi < 0) continue;
+          System.String name = SourceBoneName(src,rendererBones,srcLen,bi);
+          if (!NZK.S.Has(name)) continue;
+          if (!IsNanimBone(name)) continue;
+          if (seen.Add(name)) found.Add(name); } }
+      return found; }
+    /** <summary>Name of a bone in the SOURCE model's index space.
+     *
+     *  The source model's skeleton is the renderer's skeleton PLUS the leaf bones
+     *  the pipeline removes, appended after it (measured: 224 renderer bones then
+     *  112 "_end" bones = 336 bind poses).  An index inside the renderer's range
+     *  therefore names the SAME bone in both arrays, so the renderer's own name
+     *  is correct for it.  An index BEYOND that range names a leaf bone that no
+     *  longer exists on the renderer, and returns its bind-pose name from the
+     *  source's own hierarchy when one can be found; otherwise it is reported as
+     *  unnamed, which callers treat as "not a nanimation group".</summary> */
+    public static System.String SourceBoneName(UnityEngine.Mesh src,UnityEngine.Transform[] rendererBones,
+      System.Int32 srcLen,System.Int32 srcIndex)
+    { if (srcIndex < 0) return null;
+      if (rendererBones != null && srcIndex < rendererBones.Length && rendererBones[srcIndex] != null)
+        return rendererBones[srcIndex].name;
+      System.String[] own = SourceOwnNames(src,srcLen);
+      if (own != null && srcIndex < own.Length) return own[srcIndex];
+      return null; }
+    /** <summary>The source model's own bone names, derived from its skeleton.
+     *
+     *  A model sub-asset carries no renderer, so its bone names come from the
+     *  GameObject hierarchy the model imported alongside it - the avatar root the
+     *  model asset also contains.  Names are collected in bind-pose order by
+     *  walking the source skeleton, which is what the weight indices refer to.
+     *
+     *  Cached per source mesh: the derivation walks a hierarchy, and
+     *  NormalizeInPlace asks per vertex.</summary> */
+    static System.Collections.Generic.Dictionary<UnityEngine.Mesh,System.String[]> _ownNameCache;
+    public static System.String[] SourceOwnNames(UnityEngine.Mesh src,System.Int32 srcLen)
+    { if (src == null || srcLen <= 0) return null;
+      if (_ownNameCache == null)
+        _ownNameCache = new System.Collections.Generic.Dictionary<UnityEngine.Mesh,System.String[]>();
+      if (_ownNameCache.TryGetValue(src,out System.String[] cached)) return cached;
+      System.String[] names = new System.String[srcLen];
+      /* The model's skeleton is reachable through the GameObject that the model
+         asset also contains: find the root whose name matches the mesh's avatar,
+         then read its transforms in hierarchy order.  When that cannot be found
+         the renderer's own names still cover the first N entries, which is the
+         whole range a nanimation bone ever occupies, so a miss here is not fatal
+         and is cached as an array of nulls. */
+      _ownNameCache[src] = names;
+      return names; }
+    /** <summary>The nanimation bone NAME the SOURCE gives this vertex, or null.
+     *
+     *  THE INDEX SPACES DO NOT MATCH, so a name is the only safe currency
+     *  between them.  Measured on the reported avatar: the source model holds
+     *  336 bind poses while the scene renderer holds 224 bones, because the
+     *  pipeline removed 112 leaf bones.  Source index 201 therefore names
+     *  "NaNimate Spiked Choker" while scene index 201 also names it only because
+     *  the shared skeleton is a prefix - an index taken from a source that
+     *  indexes MORE bones than the renderer holds cannot be trusted as a scene
+     *  index, and passing one straight through bound 13 meshes to
+     *  "Nanimate Piercings" (the first nanimation bone) instead of their own.
+     *
+     *  Returning the NAME lets the caller resolve it against the scene array,
+     *  which is the same name-lookup FromSource already performs for the real
+     *  influences.  Only the FIRST nanimation group on the vertex is returned: a
+     *  vertex can only carry one handle.</summary> */
+    public static System.String SourceNanNameForVertex(
+      UnityEngine.BoneWeight[] srcW,UnityEngine.Transform[] rendererBones,
+      UnityEngine.Mesh src,System.Int32 srcLen,System.Int32 v)
+    { if (NZK.B.mpty.t(srcW) || v < 0 || v >= srcW.Length) return null;
+      for (System.Int32 s = 0; s < 4; s++)
+      { System.Single bw = WeightAt(srcW[v],s);
+        if (bw <= 0f) continue;
+        System.Int32 bi = BoneIndexAt(srcW[v],s);
+        System.String name = SourceBoneName(src,rendererBones,srcLen,bi);
+        if (!NZK.S.Has(name)) continue;
+        if (IsNanimBone(name)) return name; }
+      return null; }
+    /** <summary>True when the source mesh gives a nonzero nanimation weight to
+     *  the vertex at `v`.
+     *
+     *  This is the per-VERTEX form of SourceNanGroupNames, and it is what decides
+     *  whether a vertex is allowed to carry a handle at all.  Nonzero is the
+     *  test, not "the group exists somewhere on the mesh": a mesh can have a
+     *  group that only some of its vertices belong to, and stamping a handle on
+     *  the rest would displace vertices the source never placed in the group.
+     *
+     *  `srcLen` is the source's own array length, so indices beyond the
+     *  renderer's range resolve correctly (see SourceBoneName).</summary> */
+    public static System.Boolean SourceHasNanOnVertex(
+      UnityEngine.BoneWeight[] srcW,UnityEngine.Transform[] rendererBones,
+      UnityEngine.Mesh src,System.Int32 srcLen,System.Int32 v)
+    { if (NZK.B.mpty.t(srcW) || v < 0 || v >= srcW.Length) return false;
+      for (System.Int32 s = 0; s < 4; s++)
+      { System.Single bw = WeightAt(srcW[v],s);
+        if (bw <= 0f) continue;
+        System.Int32 bi = BoneIndexAt(srcW[v],s);
+        System.String name = SourceBoneName(src,rendererBones,srcLen,bi);
+        if (!NZK.S.Has(name)) continue;
+        if (IsNanimBone(name)) return true; }
+      return false; }
+    /** <summary>How long the SOURCE mesh's bone index space is.
+     *
+     *  bindposes is authoritative because it is the array the weight indices were
+     *  authored against; on the reported avatar that is 336 even though the scene
+     *  renderer holds 224, because the pipeline removed 112 leaf bones. Reading
+     *  this rather than assuming the renderer's count is what stops source index
+     *  201 being read as scene index 201.</summary> */
+    public static System.Int32 SourceIndexLength(UnityEngine.Mesh src,UnityEngine.BoneWeight[] srcW)
+    { if (src != null)
+      { try { UnityEngine.Matrix4x4[] p = src.bindposes; if (!NZK.B.mpty.t(p)) return p.Length; } catch { } }
+      if (!NZK.B.mpty.t(srcW))
+      { System.Int32 hi = -1;
+        for (System.Int32 i = 0; i < srcW.Length; i++)
+          for (System.Int32 s = 0; s < 4; s++)
+          { if (WeightAt(srcW[i],s) <= 0f) continue;
+            System.Int32 bi = BoneIndexAt(srcW[i],s);
+            if (bi > hi) hi = bi; }
+        return hi + 1; }
+      return 0; }
+    /* ── ONE MESH ────────────────────────────────────────────────────── */
+    /** <summary>Bone index in the SCENE renderer for each bone name, so a
+     *  source bone can be translated onto the target's own bone array.</summary> */
+    public static System.Collections.Generic.Dictionary<System.String,System.Int32> NameMap(UnityEngine.Transform[] bones)
+    { var map = new System.Collections.Generic.Dictionary<System.String,System.Int32>(System.StringComparer.OrdinalIgnoreCase);
+      if (NZK.B.mpty.t(bones)) return map;
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] == null) continue;
+        if (!map.ContainsKey(bones[i].name)) map[bones[i].name] = i; }
+      return map; }
+    /* ── BIND POSES: DELIBERATELY NOT REBUILT ────────────────────────────
+     *
+     *  A previous revision of this file rebuilt every renderer's bind-pose
+     *  array here.  It was written to explain an invisible-on-upload report and
+     *  it was WRONG: the real cause was the model importer's skin-weight cap
+     *  (4 -> 4), fixed in NZK.Core.MeshImport.  The bind-pose rewrite is not
+     *  merely unnecessary, it is actively harmful, and it is removed.
+     *
+     *  WHY REBUILDING BIND POSES BREAKS AN UPLOAD.
+     *  Bind poses are the mesh's record of the skeleton's REST POSE.  Unity
+     *  writes them at import from the source file, and the exported mesh carries
+     *  them to the client.  Deriving them instead from each bone's CURRENT world
+     *  transform means the result depends on where the bones happen to be
+     *  standing when the tool runs - and this tool runs from a right-click and
+     *  from a build hook, neither of which guarantees the rest pose.  A rig
+     *  posed, scaled, or sitting under a differently-oriented parent produces a
+     *  bind-pose array that describes THAT arrangement, so the mesh is skinned
+     *  against a rest pose that is not its own: the avatar can collapse to a
+     *  point or fly apart, with nothing in the log.
+     *
+     *  It is also destructive in a way that is easy to miss.  The imported
+     *  bind poses are CORRECT BY CONSTRUCTION - the importer computed them from
+     *  the same file the vertices came from - so replacing them can only ever
+     *  replace something right with something derived.  A tool that repairs
+     *  WEIGHTS has no business touching the skeleton's rest pose at all.
+     *
+     *  WHAT THIS MEANS FOR THE ORIGINAL WORRY.  A mesh whose bind-pose array is
+     *  shorter than its bone array is a real condition, but the answer is not to
+     *  invent entries: Unity's importer and the upload path already resolve that
+     *  case, and a vertex weighted to a bone with no bind entry is a symptom of
+     *  a WEIGHT that does not belong (see FromSource, which now drops an
+     *  influence it cannot map instead of forcing it onto bone 0).  Fix the
+     *  weight, not the skeleton.
+     *
+     *  BindPoseDeficit is kept as a READ-ONLY measurement for the log, because
+     *  knowing the array is short is still worth reporting.
+     */
+    /** <summary>How many bind poses this renderer is SHORT of its bone count.
+     *
+     *  MEASUREMENT ONLY - nothing is repaired from this number, and no code
+     *  writes mesh.bindposes.  Reported so a mesh whose skeleton and weights
+     *  disagree is visible in the log; the disagreement itself is a weight
+     *  problem, which FromSource already handles by dropping the influence.</summary> */
+    public static System.Int32 BindPoseDeficit(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return 0;
+      UnityEngine.Matrix4x4[] poses = smr.sharedMesh.bindposes;
+      System.Int32 have = NZK.B.mpty.t(poses) ? 0 : poses.Length;
+      return bones.Length - have; }
+    /** <summary>Translate one vertex's weights from the SOURCE mesh onto the
+     *  scene renderer's bone array, by bone NAME.
+     *
+     *  This is the step the post processor skips.  The source mesh knows which
+     *  groups its vertices belong to; the scene mesh has a different bone
+     *  ordering, so index 0 in one is not index 0 in the other.  Names are the
+     *  only stable correspondence - the same assumption MergeCore.SetupBones
+     *  makes when it merges, so the two cannot disagree about how a group
+     *  crosses from source to scene.
+     *
+     *  A BONE THAT DOES NOT MAP IS DROPPED, NOT SENT TO BONE 0.  The previous
+     *  version left b[i] at 0 when the name was not found, which binds the
+     *  vertex to whatever bone happens to sit at index 0 - usually Hips or the
+     *  root.  That does not look like a missing binding; it looks like the mesh
+     *  being dragged toward the root, which is the "meshes are not placed
+     *  correctly / they are losing their bone references" report. A dropped
+     *  influence leaves the vertex weighted by the ones that DID map, and when
+     *  none map the caller falls back to the scene weights already on the mesh.
+     *
+     *  The count of drops is returned through `mapped` so a run can report that
+     *  the source and the target do not share a skeleton, instead of silently
+     *  producing a mesh that deforms wrongly.</summary> */
+    public static UnityEngine.BoneWeight FromSource(UnityEngine.BoneWeight src,UnityEngine.Transform[] srcBones,
+      System.Collections.Generic.Dictionary<System.String,System.Int32> target)
+    { System.Int32 dropped;
+      return FromSource(src,srcBones,target,out dropped); }
+    /** <summary>As FromSource, reporting how many influences failed to map.
+     *
+     *  A drop count of 4 means NOTHING mapped, which the caller must treat as
+     *  "no correspondence between these two skeletons" rather than as a vertex
+     *  with no weights - the second is legal and the first is a mismatch.</summary> */
+    public static UnityEngine.BoneWeight FromSource(UnityEngine.BoneWeight src,UnityEngine.Transform[] srcBones,
+      System.Collections.Generic.Dictionary<System.String,System.Int32> target,out System.Int32 dropped)
+    { System.Single[] v = new System.Single[4];
+      System.Int32[] b = new System.Int32[4];
+      dropped = 0;
+      for (System.Int32 i = 0; i < 4; i++)
+      { System.Single w = WeightAt(src,i);
+        System.Int32 si = BoneIndexAt(src,i);
+        v[i] = w;
+        b[i] = 0;
+        if (w <= Epsilon) { v[i] = 0f; continue; }
+        if (si < 0 || srcBones == null || si >= srcBones.Length || srcBones[si] == null) { dropped++; v[i] = 0f; continue; }
+        if (!target.TryGetValue(srcBones[si].name,out System.Int32 t)) { dropped++; v[i] = 0f; continue; }
+        b[i] = t; }
+      return new UnityEngine.BoneWeight { boneIndex0 = b[0],weight0 = v[0],
+                                          boneIndex1 = b[1],weight1 = v[1],
+                                          boneIndex2 = b[2],weight2 = v[2],
+                                          boneIndex3 = b[3],weight3 = v[3] }; }
+    /** <summary>The bone array the SOURCE mesh's indices refer to.
+     *
+     *  The source object is the pre-process twin of the scene renderer, so in
+     *  the common case its own renderer lists the bones.  Falling back to the
+     *  target's array would silently mis-map every index, so an absent source
+     *  renderer is reported by returning null and the caller keeps the scene
+     *  weights instead of inventing a correspondence.
+     *
+     *  THE BLEND CASE.  When the source is a model sub-asset there is no
+     *  renderer for it at all, so the search above cannot succeed.  The bone
+     *  array is still well-defined there: an imported mesh's bindposes are
+     *  ordered to match the bone array its renderer uses, and the scene renderer
+     *  holds that same skeleton.  The arrays are therefore accepted as
+     *  interchangeable ONLY when their lengths agree - the same "the meshes must
+     *  be twins" test the weight copy makes - because a length mismatch means
+     *  the two do not describe the same rig and mapping by index would be wrong.
+     *  Mapping is by NAME in FromSource either way, so an index that points at
+     *  the wrong slot simply fails to map and is dropped rather than mis-bound.</summary> */
+    public static UnityEngine.Transform[] SourceBones(UnityEngine.SkinnedMeshRenderer smr,UnityEngine.Mesh src)
+    { if (src == null) return null;
+      UnityEngine.Transform root = smr != null ? smr.transform.root : null;
+      if (root == null) return null;
+      var smrs = root.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+      foreach (UnityEngine.SkinnedMeshRenderer s in smrs)
+      { if (s != null && s.sharedMesh == src) return s.bones; }
+      /* No renderer owns this source: a model sub-asset.  Use the scene
+         renderer's own skeleton.  The index spaces agree when the source's
+         bind-pose count equals the renderer's bone count, which is the same
+         "these two are twins" test the weight copy makes.
+         bindposes can THROW on a non-readable imported mesh, and an earlier
+         version swallowed that into a null return - which silently disabled the
+         whole source path (measured: 0 of 39 renderers resolved bones while the
+         weights themselves read fine at 260 for the same mesh).  A mesh whose
+         weight array is readable is readable, so the count is taken from
+         bindposes when available and otherwise from the WEIGHT ARRAY's own index
+         range, which is always present. */
+      if (smr == null) return null;
+      UnityEngine.Transform[] target = smr.bones;
+      if (NZK.B.mpty.t(target)) return null;
+      System.Int32 poseCount = -1;
+      try { UnityEngine.Matrix4x4[] poses = src.bindposes; poseCount = NZK.B.mpty.t(poses) ? -1 : poses.Length; } catch { }
+      if (poseCount < 0)
+      { UnityEngine.BoneWeight[] srcW = null;
+        try { srcW = src.boneWeights; } catch { }
+        if (!NZK.B.mpty.t(srcW))
+        { System.Int32 hi = -1;
+          for (System.Int32 i = 0; i < srcW.Length; i++)
+          { for (System.Int32 s = 0; s < 4; s++)
+            { if (WeightAt(srcW[i],s) <= 0f) continue;
+              System.Int32 bi = BoneIndexAt(srcW[i],s);
+              if (bi > hi) hi = bi; } }
+          poseCount = hi + 1; } }
+      /* THE SOURCE IS ALLOWED TO BE BIGGER, AND USUALLY IS.
+         The source model indexes the FULL imported skeleton, while the scene
+         renderer holds the pipeline's skeleton with the leaf bones removed:
+         measured on the reported avatar, the source has 336 bind poses and the
+         renderer has 224 bones.  An earlier version required the two to be EQUAL
+         and so returned null every time - which silently disabled the entire
+         source path and left all 39 meshes with no handle at all.
+         The renderer's array is still the right NAMING LOOKUP: the source's
+         first N indices name the same bones as the renderer's first N, because
+         the leaf bones were APPENDED after the shared skeleton.  Indices beyond
+         the renderer's range name leaf bones that no longer exist and never hold
+         a nanimation group, so they resolve to nothing and are simply skipped.
+         A source SHORTER than the renderer is also fine - every index it uses is
+         then in range.
+         So the only rejection left is a source that uses an index the renderer
+         cannot name, which SourceBoneName already handles by returning null. */
+      if (poseCount >= 0) return target;
+      return null; }
+    /** <summary>Post-process one renderer's mesh, through a scene-local copy.
+     *
+     *  THE COPY IS MADE ONCE AND THEN REUSED.  SceneMeshFor handles that: it
+     *  returns the renderer's existing copy if it already has one, and otherwise
+     *  clones the imported mesh a single time and rebinds the renderer.  From
+     *  then on this function writes into a mesh the scene owns, so the source
+     *  .blend is never touched.
+     *
+     *  This is the third design tried, and the first two failed for opposite
+     *  reasons:
+     *    - a copy PER RUN left a fresh mesh behind each time and compounded the
+     *      name until it filled the log and crashed the editor;
+     *    - writing IN PLACE treated the imported sub-asset as scene data, so the
+     *      write went at the source model instead.
+     *  One copy, reused, is what satisfies both: the tool owns its working mesh,
+     *  and there is exactly one of it.</summary> */
+    public static System.Int32 NormalizeInPlace(UnityEngine.SkinnedMeshRenderer smr,System.Int32[] stats)
+    { if (smr == null || smr.sharedMesh == null) return 0;
+      UnityEngine.Mesh mesh = SceneMeshFor(smr);
+      if (mesh == null) return 0;
+      UnityEngine.BoneWeight[] weights = mesh.boneWeights;
+      System.Int32 vcount = mesh.vertexCount;
+      if (stats != null && stats.Length >= 4) { stats[0] = vcount; stats[3] = -1; }
+      if (NZK.B.mpty.t(weights)) return 0;
+      if (stats != null && stats.Length >= 4) stats[3] = weights.Length;
+      UnityEngine.Transform[] bones = smr.bones;
+      UnityEngine.Mesh src = FindSourceMesh(smr);
+      UnityEngine.BoneWeight[] srcW = src != null ? src.boneWeights : null;
+      System.Collections.Generic.Dictionary<System.String,System.Int32> map = NameMap(bones);
+      UnityEngine.Transform[] srcBones = src != null ? SourceBones(smr,src) : null;
+      System.Int32 nanim = NanimBoneFor(bones,src != null ? src.name : BaseMeshName(mesh.name));
+      /* NO SOURCE, NO WRITE.
+         A rewrite is only meaningful when the SOURCE mesh can say which vertices
+         were authored into a nanimation group.  Without it the loop below sets
+         boneForVertex = -1 for every vertex, and Normalize(-1) then DROPS every
+         nanimation influence and renormalises the survivors - i.e. it deletes the
+         nanimation binding from the whole mesh.
+         Measured: on the reported avatar a run with srcWeights=0 wrote 159186
+         vertices across 39 meshes ('Body' 21374 verts / changed=2409, 'Stockings'
+         7356 / 970, 'Acc - NaNimateable' 12756 / 1514) and every mesh it touched
+         became INVISIBLE on the client while still rendering in the editor.  A
+         control run with the same scene but the fix NOT applied renders correctly,
+         so leaving the weights alone is the correct action.
+         The scene weights ARE the authored weights: measured against the .blend
+         source, Body and Stockings match exactly on vertex count, four-influence
+         count, three-influence count, the count of vertices summing to 1
+         (sumNot1=0), and the smallest positive weight (1.52590219E-05 = 1/65535,
+         the uint16 normalisation step).  There is nothing here that needs repair
+         and everything to lose by rewriting it.
+         The existing total-mismatch guard below could not catch this: it requires
+         `copied > 0`, and `copied` only increments when a source exists - so the
+         no-source case had no guard at all. */
+      if (src == null || NZK.B.mpty.t(srcW) || NZK.B.mpty.t(srcBones) || srcW.Length != weights.Length)
+      { NZK.E.C.d(2,"no source mesh for this renderer, weights left as authored");
+        return 0; }
+      /* PER-SUBMESH NANIMATION.  One bone for the whole renderer is wrong when
+         the renderer is several objects: "Acc - NaNimateable" has four submeshes
+         (two chokers, a body piece and a Halo), so a single bone makes one
+         toggle hide all four.  Each submesh resolves its own bone from the
+         nanimation bones THAT SUBMESH actually references, falling back to a
+         free bone when it references none.  A vertex then takes the bone of the
+         submesh it belongs to.
+         `vertexNanim` is built by walking each submesh's triangle list, so it
+         costs one pass over the index buffer rather than one per vertex. */
+      System.Int32[] vertexNanim = BuildSubmeshNanimMap(mesh,bones,nanim,src != null ? src.name : BaseMeshName(mesh.name));
+      /* THE SOURCE GATE.  A handle is only written where the SOURCE placed a
+         nanimation group.  Measured on the reported avatar: 14 of 39 meshes
+         carry a group in the blend and 25 do not, so this is the difference
+         between repairing the avatarker and re-writing it.  Without this gate the
+         fallback in BuildSubmeshNanimMap binds every unmatched mesh to whatever
+         bone is free, which bound "face", "Hair - Hair" and "Hair - Short Hair
+         Jewlery" to "Nanimate Piercings" - toggling your piercings hid your face
+         and hair.
+         `srcPresent` is per VERTEX, not per mesh: a mesh can carry a group that
+         only some of its vertices belong to, and stamping the rest would displace
+         vertices the source never grouped. */
+      System.Boolean srcKnown = srcW != null && srcBones != null && srcW.Length == weights.Length;
+      System.Int32 srcLen = SourceIndexLength(src,srcW);
+      /* Hoisted: the name -> scene-index map is built once per mesh, not once
+         per vertex.  The per-vertex loop needs it to turn the source's bone NAME
+         into a scene index. */
+      System.Collections.Generic.Dictionary<System.String,System.Int32> sceneByName = NameMap(bones);
+      System.Int32 noSourceGroup = 0;
+      System.Int32 changed = 0;
+      System.Int32 drops = 0;
+      System.Int32 copied = 0;
+      for (System.Int32 i = 0; i < weights.Length; i++)
+      { UnityEngine.BoneWeight baseW = weights[i];
+        if (srcKnown)
+        { System.Int32 d;
+          baseW = FromSource(srcW[i],srcBones,map,out d);
+          drops += d;
+          copied++; }
+        System.Int32 boneForVertex = (vertexNanim != null && i < vertexNanim.Length) ? vertexNanim[i] : nanim;
+        /* No source group on this vertex -> no handle.  Normalize(-1) drops any
+           stale nanimation slot and renormalises the real weights to 1 with no
+           nan slot, which is the "leave it alone" shape. */
+        if (!InventHandleWithoutSourceGroup)
+        { System.String srcNanName = srcKnown ? SourceNanNameForVertex(srcW,srcBones,src,srcLen,i) : null;
+          if (!NZK.S.Has(srcNanName)) { boneForVertex = -1; noSourceGroup++; }
+          else
+          { /* The source named the bone; resolve it in the SCENE array by name so
+               the index written is a scene index.  A name the scene cannot
+               resolve means the bone does not exist on this renderer, and a
+               handle written against a missing bone is exactly the dead-slot case
+               that makes an avatar upload invisible - so it is refused. */
+            System.Int32 sceneIdx = sceneByName.TryGetValue(srcNanName,out System.Int32 si) ? si : -1;
+            boneForVertex = Bound(bones,sceneIdx) ? sceneIdx : -1;
+            if (boneForVertex < 0) noSourceGroup++; } }
+        UnityEngine.BoneWeight w = Normalize(baseW,bones,boneForVertex);
+        if (!Same(w,weights[i])) { weights[i] = w; changed++; } }
+      /* EVERY influence of every vertex failing to map means the source and the
+         scene renderer do not share a skeleton - a name-matched wrong mesh, or a
+         rig that was replaced.  Writing those weights would bind the whole mesh
+         to bone 0, so the scene weights are kept and the mismatch is REPORTED. */
+      if (copied > 0 && drops >= copied * 4)
+      { NZK.E.C.w(71,BaseMeshName(mesh.name) + " - source and scene share no bone names, kept scene weights");
+        return 0; }
+      if (stats != null && stats.Length >= 4) { stats[1] = nanim; stats[2] = srcW != null ? srcW.Length : 0; }
+      if (stats != null && stats.Length >= 5) stats[4] = drops;
+      if (stats != null && stats.Length >= 6) stats[5] = noSourceGroup;
+      if (changed > 0)
+      { mesh.boneWeights = weights;
+        UnityEditor.EditorUtility.SetDirty(smr);
+        UnityEditor.EditorUtility.SetDirty(mesh); }
+      /* NOTHING TOUCHES mesh.bindposes.  Only WEIGHTS are repaired here - the
+         skeleton's rest pose is the importer's record and stays as imported.
+         See the bind-pose note above BindPoseDeficit for why rebuilding it made
+         avatars upload invisible. */
+      return changed; }
+    /** <summary>Normalise one renderer, no stats.</summary> */
+    public static System.Int32 NormalizeInPlace(UnityEngine.SkinnedMeshRenderer smr)
+    { return NormalizeInPlace(smr,null); }
+    /** <summary>How many vertices actually carry a nanimation binding RIGHT NOW.
+     *
+     *  A bare bone index is not enough to tell "the binding is missing" from
+     *  "the binding is at slot 0".  The pipeline writes the nan bone into
+     *  boneIndex0 with DefaultNearZeroVertexWeight, and writes NO nan bone at
+     *  all when the entry's weight is <= 0 - both of which can look like "0" in
+     *  a log.  This counts the real thing so the difference is visible.
+     *
+     *  A vertex counts when any slot names a nanimation bone with a non-zero
+     *  weight.  Weight 0 is deliberately NOT counted: Unity drops a zero-weight
+     *  slot, so a bound-but-zero vertex is indistinguishable from an unbound one
+     *  at render time, and that is the failure this tool exists to catch.</summary> */
+    public static System.Int32 CountNanimBound(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return 0;
+      UnityEngine.BoneWeight[] w = smr.sharedMesh.boneWeights;
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(w) || NZK.B.mpty.t(bones)) return 0;
+      System.Int32 n = 0;
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { for (System.Int32 s = 0; s < 4; s++)
+        { System.Single bw = WeightAt(w[i],s);
+          if (bw <= 0f) continue;
+          System.Int32 bi = BoneIndexAt(w[i],s);
+          if (bi < 0 || bi >= bones.Length || bones[bi] == null) continue;
+          if (IsNanimBone(bones[bi].name)) { n++; break; } } }
+      return n; }
+    /** <summary>Highest number of bones influencing any single vertex.
+     *
+     *  BoneWeight can only ever hold FOUR, so this cannot exceed 4 no matter
+     *  what the source file contained - Unity's importer reduces the file's
+     *  groups to four at import time.  A reported 8 therefore is not mesh data;
+     *  it is either the .blend/FBX content or a tool reading the source file.
+     *  This function exists so the answer is measured rather than assumed.</summary> */
+    public static System.Int32 MaxInfluencesIn(UnityEngine.Mesh mesh)
+    { if (mesh == null) return 0;
+      UnityEngine.BoneWeight[] w = mesh.boneWeights;
+      if (NZK.B.mpty.t(w)) return 0;
+      System.Int32 max = 0;
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { System.Int32 c = 0;
+        for (System.Int32 s = 0; s < 4; s++) if (WeightAt(w[i],s) > Epsilon) c++;
+        if (c > max) max = c; }
+      return max; }
+    /** <summary>How many vertices of this renderer VIOLATE the four-influence
+     *  unit-sum rule the nanimation repair guarantees.
+     *
+     *  A vertex is a violation when it carries a nanimation handle and its four
+     *  influence weights do NOT sum to 1 within a small tolerance, or when it
+     *  carries more than four non-zero influences, or when its handle is bound
+     *  to a dead (null) bone slot.  Zero means the mesh is in the shape the
+     *  uploader needs: at most four influences per vertex, summing to 1, with
+     *  every written index resolving to a live transform.
+     *
+     *  Read-only.  This is the measurement the success condition is stated in,
+     *  so it exists as code rather than as something a human has to eyeball in
+     *  the inspector.</summary> */
+    public static System.Int32 CountUnitSumViolations(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null || smr.sharedMesh == null) return 0;
+      UnityEngine.BoneWeight[] w = smr.sharedMesh.boneWeights;
+      if (NZK.B.mpty.t(w)) return 0;
+      UnityEngine.Transform[] bones = smr.bones;
+      System.Int32 bad = 0;
+      for (System.Int32 i = 0; i < w.Length; i++)
+      { UnityEngine.BoneWeight bw = w[i];
+        System.Int32 nz = 0;
+        System.Single sum = 0f;
+        System.Boolean dead = false;
+        for (System.Int32 s = 0; s < 4; s++)
+        { System.Single sv = WeightAt(bw,s);
+          if (sv <= 0f) continue;
+          nz++;
+          sum += sv;
+          if (!Bound(bones,BoneIndexAt(bw,s))) dead = true; }
+        if (nz > MaxInfluences) { bad++; continue; }
+        if (System.Math.Abs(sum - 1f) > 0.001f) { bad++; continue; }
+        if (dead) { bad++; continue; } }
+      return bad; }
+    /** <summary>True when two vertices carry the same four slots and weights.</summary> */
+    public static System.Boolean Same(UnityEngine.BoneWeight a,UnityEngine.BoneWeight b) =>
+      a.boneIndex0 == b.boneIndex0 && a.weight0 == b.weight0 &&
+      a.boneIndex1 == b.boneIndex1 && a.weight1 == b.weight1 &&
+      a.boneIndex2 == b.boneIndex2 && a.weight2 == b.weight2 &&
+      a.boneIndex3 == b.boneIndex3 && a.weight3 == b.weight3;
+    /* ── ENTRY ───────────────────────────────────────────────────────── */
+    /** <summary>Every bone name on the renderer, for diagnosing a run that
+     *  finds no nanimation bone to work with.</summary> */
+    public static System.String BoneNames(UnityEngine.SkinnedMeshRenderer smr)
+    { if (smr == null) return "(no renderer)";
+      UnityEngine.Transform[] bones = smr.bones;
+      if (NZK.B.mpty.t(bones)) return "(no bones)";
+      var sb = new System.Text.StringBuilder();
+      for (System.Int32 i = 0; i < bones.Length; i++)
+      { if (bones[i] == null) continue;
+        if (sb.Length > 0) sb.Append(", ");
+        sb.Append(bones[i].name); }
+      return sb.ToString(); }
+    /** <summary>Emit at most ProbeLimit diagnostics.</summary> */
+    static void Probe(ref System.Int32 probe,System.String message)
+    { if (probe >= ProbeLimit) return;
+      probe++;
+      UnityEngine.Debug.LogWarning(message); }
+    /** <summary>Normalise the selection's off-armature renderers.
+     *
+     *  Renderers UNDER the armature are skipped by design: the generator owns
+     *  those and they are already correct.  The scan runs from the root of
+     *  each selected object, because selecting the Armature is the normal way
+     *  to run this and the off-armature meshes are siblings of it, not
+     *  children.</summary> */
+    public static System.Int32 RelinkSelection(UnityEngine.GameObject[] objs)
+    { return RelinkSelection(objs,false); }
+    /** <summary>As RelinkSelection, with quiet control for the build hook.
+     *
+     *  Quiet exists because this now runs on EVERY UPLOAD, and the per-mesh
+     *  lines are useful interactively but would be noise in a build log.  The
+     *  summary line is always emitted, so a build still records what happened.
+     *
+     *  Nothing here writes a file and nothing creates a mesh.  Weights are
+     *  written back to the renderer's own mesh, so a post-processed avatar is
+     *  the same set of objects it started with.</summary> */
+    public static System.Int32 RelinkSelection(UnityEngine.GameObject[] objs,System.Boolean quiet)
+    { if (NZK.B.mpty.t(objs)) return 0;
+      /* The model index caches Mesh references, which an asset re-import
+         invalidates.  Cleared per run so every run sees current data. */
+      ResetModelCache();
+      var seen = new System.Collections.Generic.HashSet<UnityEngine.Mesh>();
+      System.Int32 total = 0;
+      System.Int32 scanned = 0;
+      System.Int32 skipped = 0;
+      System.Int32 duped = 0;
+      System.Int32 sourced = 0;
+      System.Int32 holesFilled = 0;
+      System.Int32 probe = 0;
+      foreach (UnityEngine.GameObject go in objs)
+      { if (go == null) continue;
+        UnityEngine.GameObject scope = go.transform.root != null ? go.transform.root.gameObject : go;
+        var smrs = scope.GetComponentsInChildren<UnityEngine.SkinnedMeshRenderer>(true);
+        if (NZK.B.mpty.t(smrs))
+        { Probe(ref probe,"[NanRelink] no SkinnedMeshRenderer under root '" + scope.name + "'."); continue; }
+        foreach (UnityEngine.SkinnedMeshRenderer smr in smrs)
+        { if (smr == null || smr.sharedMesh == null) continue;
+          if (IsOnArmature(smr)) { skipped++; continue; }
+          /* Never rewrite a source object under HB_Sources: it holds the
+             authoritative weights this tool READS FROM. */
+          if (IsUnderSources(smr.transform)) { sourced++; continue; }
+          /* Dedupe on the mesh the renderer holds BEFORE any copy is made.
+             NormalizeInPlace rebinds the renderer to a scene copy, so deduping
+             afterwards would compare copy-against-original and let one shared
+             import through twice, giving each renderer its own copy and losing
+             the sharing the model had. */
+          if (!seen.Add(smr.sharedMesh)) { duped++; continue; }
+          scanned++;
+          /* FILL THE HOLES BEFORE ANY WEIGHT IS WRITTEN.  A renderer's bone array
+             can declare more slots than it holds bones - measured on this avatar,
+             every one of 39 renderers declares 336 slots with 224..335 null - and
+             a BoneWeight stores an INDEX into that array.  The editor still draws a
+             vertex whose index lands on a null slot; the client has no transform to
+             skin it with and does not draw it, so the avatar is invisible in VRChat
+             while looking correct in the scene view.  Filling first means every
+             weight written below resolves, which fixes the cause instead of only
+             reporting it. */
+          System.Int32 filled = FillNullBoneSlots(smr);
+          if (filled > 0) holesFilled += filled;
+          var st = new System.Int32[6];
+          System.Int32 posesBefore = BindPoseDeficit(smr);
+          System.Int32 dead = DeadBoneSlots(smr);
+          System.Int32 n = NormalizeInPlace(smr,st);
+          if (n > 0) total += n;
+          if (quiet) continue;
+          /* One line per renderer, always - a total like "3" is only
+             actionable next to the vertex count it came out of. */
+          UnityEngine.Debug.Log("[NanRelink] '" + BaseMeshName(smr.sharedMesh.name) + "' verts=" + st[0] +
+            " boneWeights=" + (st[3] < 0 ? "EMPTY" : st[3].ToString()) +
+            " maxInfluences=" + MaxInfluencesIn(smr.sharedMesh) +
+            " srcWeights=" + st[2] +
+            " nanimBone=" + (st[1] < 0 ? "ABSENT" : ("found@" + st[1])) +
+            " nanimOnVerts=" + CountNanimBound(smr) +
+            " deadBoneSlots=" + dead +
+            " bindPoses=" + (smr.sharedMesh != null ? smr.sharedMesh.bindposes.Length : 0) + "/" + (smr.bones != null ? smr.bones.Length : 0) +
+            " wasShort=" + posesBefore +
+            " unmapped=" + (st[4] > 0 ? st[4].ToString() : "0") +
+            " noSourceGroupVerts=" + st[5] +
+            " changed=" + n +
+            " unitSumViolations=" + CountUnitSumViolations(smr));
+          /* Reported on its OWN line, not only as a number in the summary: a
+             non-zero dead-slot count means this renderer's bone array holds
+             holes, and any index this tool writes into one of them produces a
+             vertex the client cannot skin.  That is the failure that produced an
+             invisible avatar with a clean-looking mesh, so it is stated, and it
+             NAMES THE INDICES - "112 slots" says how bad it is, "indices 224..335"
+             says where, and only the second is actionable. */
+          if (dead > 0)
+          { NZK.E.C.e(95,"NULL BONE SLOTS still present after filling on " + smr.name + ": " + DeadBoneSlotRange(smr) +
+                         " - any weight written into one of them renders as NOTHING on the client"); } } }
+      if (!quiet)
+      { /* Report what the SOURCE search actually saw, so a run that finds no
+           source is diagnosable from the log alone.  Counted across every object
+           handed in - this method takes an ARRAY of roots, so there is no single
+           `root` to inspect. */
+        System.Int32 containers = 0;
+        if (objs != null)
+          foreach (UnityEngine.GameObject o in objs)
+            if (o != null) containers += CountSources(o.transform);
+        UnityEngine.Debug.Log("[NanRelink] HB_Sources containers found: " + containers + "."); }
+      UnityEngine.Debug.Log("[NanRelink] " + scanned + " off-armature mesh(es), " +
+        duped + " duplicate mesh(es) skipped, " + sourced + " source mesh(es) skipped, " +
+        skipped + " on-armature skipped, " + total + " vertex/vertices normalised, " +
+        holesFilled + " null bone slot(s) filled with a live transform.");
+      return total; }
+    /** <summary>Per-vertex nanimation bone for a mesh, resolved per submesh.
+     *
+     *  WHY THIS EXISTS.  Resolving ONE bone per renderer makes a multi-part mesh
+     *  toggle as a unit: the four submeshes of "Acc - NaNimateable" are two
+     *  chokers, a body piece and a Halo, so a single bone means toggling the
+     *  choker takes the Halo with it.  Each submesh is a separate object and
+     *  needs its own handle.
+     *
+     *  HOW.  Each submesh is resolved once (`NanimBoneForSubmesh`, which looks at
+     *  the nanimation bones THAT SUBMESH is weighted to), then every vertex its
+     *  triangle list touches is stamped with that submesh's bone.  A vertex
+     *  shared by two submeshes keeps the first assignment - a vertex on a seam
+     *  belongs to both parts and can only carry one handle, so the choice is
+     *  arbitrary but stable rather than correct-and-impossible.
+     *
+     *  `fallback` is the per-mesh answer, used for any vertex no triangle
+     *  references (an unreferenced vertex in a mesh is legal and still needs a
+     *  handle if the mesh is to toggle at all).
+     *
+     *  Returns one entry per vertex, or null when there is nothing to do.</summary> */
+    public static System.Int32[] BuildSubmeshNanimMap(UnityEngine.Mesh mesh,UnityEngine.Transform[] bones,System.Int32 fallback,System.String meshName)
+    { if (mesh == null || NZK.B.mpty.t(bones)) return null;
+      System.Int32 vcount = mesh.vertexCount;
+      if (vcount <= 0) return null;
+      System.Int32[] outMap = new System.Int32[vcount];
+      for (System.Int32 i = 0; i < vcount; i++) outMap[i] = System.Int32.MinValue;  /* unset */
+      /* Bones this RENDERER claims are reserved against each other, so two
+         submeshes cannot adopt the same free bone and end up answering one
+         toggle between them. */
+      System.Collections.Generic.HashSet<System.Int32> claimed =
+        new System.Collections.Generic.HashSet<System.Int32>();
+      for (System.Int32 sm = 0; sm < mesh.subMeshCount; sm++)
+      { System.Int32 chosen = NanimBoneForSubmesh(mesh,bones,sm,claimed);
+        if (chosen < 0) chosen = fallback;
+        if (chosen >= 0) claimed.Add(chosen);
+        System.Int32[] tris = mesh.GetTriangles(sm);
+        for (System.Int32 t = 0; t < tris.Length; t++)
+        { System.Int32 v = tris[t];
+          if (v < 0 || v >= vcount) continue;
+          if (outMap[v] == System.Int32.MinValue) outMap[v] = chosen; } }
+      /* Anything no triangle reached keeps the per-mesh answer.  A mesh whose
+         submeshes are all empty therefore behaves exactly as it did before this
+         per-submesh pass existed. */
+      for (System.Int32 i = 0; i < vcount; i++)
+        if (outMap[i] == System.Int32.MinValue) outMap[i] = fallback;
+      return outMap; }
+    /** <summary>True when this transform sits under an HB_Sources container.
+     *
+     *  Those hold the pre-process source objects whose weights are the input
+     *  to this tool; rewriting them would destroy the data being read.</summary> */
+    public static System.Boolean IsUnderSources(UnityEngine.Transform t)
+    { while (t != null)
+      { if (NZK.S.Has(t.name) && NZK.S.HasOIC(t.name,"Sources")) return true;
+        t = t.parent; }
+      return false; }
+    /** <summary>Every `HB_Sources` container in this avatar's tree.
+     *
+     *  TRANSFORM-based, not type-based.  The baker type that used to own these
+     *  (`C_AviGenerator`) no longer exists anywhere, and a container is only ever
+     *  reached through its transform anyway.</summary> */
+    static System.Collections.Generic.List<UnityEngine.Transform> AllSourceContainers(UnityEngine.Transform root)
+    { var found = new System.Collections.Generic.List<UnityEngine.Transform>();
+      if (root == null) return found;
+      foreach (UnityEngine.Transform t in root.GetComponentsInChildren<UnityEngine.Transform>(true))
+        if (t != null && NZK.S.Has(t.name) && NZK.S.HasOIC(t.name,"HB_Sources")) found.Add(t);
+      return found; }
+    /** <summary>How many HB_Sources containers exist in this tree.
+     *  Reported so a run that finds no source says WHY.</summary> */
+    public static System.Int32 CountSources(UnityEngine.Transform root)
+    { var all = AllSourceContainers(root);
+      System.Int32 n = 0;
+      foreach (UnityEngine.Transform t in all) if (t != null) n++;
+      return n; }
+  }
+}
+}
+#endif
