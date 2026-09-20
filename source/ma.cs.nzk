@@ -993,8 +993,79 @@ public static partial class Core
       rebuilt.bindposes = mesh_poses;
 
       renderer.bones = newBones;
-      renderer.sharedMesh = rebuilt;
+
+      /* NEVER LEAVE the rebuilt mesh scene-inline.
+       *
+       * MEASURED DAMAGE.  Assigning a runtime-created Mesh straight to
+       * `sharedMesh` and saving the scene DETACHES the renderer from its source
+       * asset: the rebuilt mesh is serialised INTO the scene file. `nem.unity`
+       * grew to 237 MB this way and the renderer afterwards reports
+       * `asset=(NONE - scene-inline)`, `v=13018`, `bones=250` while the original
+       * `Stockings.asset` still reads 7354. Deleting the bone objects does not
+       * undo it - the mesh stays split with dangling surgery.
+       *
+       * So the rebuild is PERSISTED AS AN ASSET beside the source and the asset
+       * is assigned instead. That keeps three things true at once:
+       *   - the scene stays small and diffable,
+       *   - the pristine source mesh is never overwritten,
+       *   - the transform is reversible: delete the generated asset and reassign
+       *     the original to get the untransformed mesh back.
+       *
+       * `sourcePath` is empty only for a mesh that was already scene-inline, in
+       * which case there is no asset to sit beside and the mesh stays in memory
+       * (the caller owns persisting it). */
+      UnityEngine.Mesh persisted = PersistRebuilt(mesh,rebuilt,out error);
+      renderer.sharedMesh = persisted != null ? persisted : rebuilt;
       return result; }
+
+    /** <summary>Write a rebuilt mesh as an asset beside its source.
+     *
+     *  Returns the asset mesh, or null when there is no usable source path (the
+     *  caller then keeps the in-memory mesh).  Never overwrites the source: the
+     *  name is derived from it with a fixed suffix, so a second run replaces its
+     *  own previous output rather than the original.</summary> */
+    static UnityEngine.Mesh PersistRebuilt(
+      UnityEngine.Mesh source,
+      UnityEngine.Mesh rebuilt,
+      out System.String error)
+    { error = null;
+#if UNITY_EDITOR
+      System.String srcPath = UnityEditor.AssetDatabase.GetAssetPath(source);
+      if (System.String.IsNullOrEmpty(srcPath)) return null;
+      /* Only ever write next to a real asset file. A built-in or package mesh
+       * has a path that cannot be written to. */
+      if (!srcPath.StartsWith("Assets/",System.StringComparison.Ordinal)) return null;
+
+      System.String dir = System.IO.Path.GetDirectoryName(srcPath);
+      System.String file = System.IO.Path.GetFileNameWithoutExtension(srcPath);
+      System.String outPath = dir + "/" + file + "_NZKNaNim.asset";
+      System.String tmpPath = outPath + ".tmp";
+
+      /* Build the asset in a THROWAWAY object first, then copy over the target in
+       * one step. Writing straight into the target risks leaving a half-written
+       * mesh behind if anything below throws. */
+      UnityEngine.Mesh staging = new UnityEngine.Mesh();
+      UnityEditor.EditorUtility.CopySerialized(rebuilt,staging);
+      staging.name = file + "_NZKNaNim";
+
+      UnityEngine.Mesh existing = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Mesh>(outPath);
+      if (existing != null)
+      { /* Asset exists: overwrite its contents so every existing reference keeps
+         * pointing at the same object. Creating a new asset instead would break
+         * the renderer's link on the next domain reload. */
+        UnityEditor.EditorUtility.CopySerialized(staging,existing);
+        UnityEditor.EditorUtility.SetDirty(existing);
+        UnityEngine.Object.DestroyImmediate(staging);
+        UnityEditor.AssetDatabase.SaveAssets();
+        return existing; }
+
+      UnityEditor.AssetDatabase.CreateAsset(staging,outPath);
+      UnityEditor.AssetDatabase.SaveAssets();
+      return staging;
+#else
+      return null;
+#endif
+    }
 
     /** <summary>Index of a transform inside the renderer's bone array, or -1.
      *
