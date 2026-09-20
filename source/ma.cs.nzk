@@ -95,6 +95,13 @@ public static partial class Core
       /** Bones allocated to this group, in creation order. */
       public System.Collections.Generic.List<AddedBone> bones =
         new System.Collections.Generic.List<AddedBone>();
+      /** The EXISTING armature bone under NaNimations that the clip drives.
+       *
+       *  The new bones hang UNDER this one, so the clip's NaN scale propagates
+       *  down to them.  They must NOT be reparented onto the mesh's influence
+       *  bone: that bone is an ordinary rig bone (Hips, Spine, a toe), and
+       *  renaming or re-owning it corrupts the rig. */
+      public UnityEngine.Transform nanimationBone;
     }
 
     /* ── RESULT ──────────────────────────────────────────────────────── */
@@ -186,18 +193,15 @@ public static partial class Core
       /* IDEMPOTENCY.  Re-running the tool must not stack a second set of NaN
        * bones on the same mesh - which is what happened when the report bug was
        * fixed and the pass ran twice but reported success both times
-       * (`BEFORE bones=228` on the second run).  Detect our own output: every
-       * bone we create is named `<group>` or `<group>_<i>` and lives under a
-       * `NZK_NanimBuffer_<n>` transform, so a renderer that already carries a
-       * buffer object has already been processed. */
+       * (`BEFORE bones=228` on the second run).  Detect our own output by the
+       * name every influence bone we create carries. */
       UnityEngine.Transform[] existing = renderer.bones;
       for (System.Int32 b = 0; b < existing.Length; b++)
       { UnityEngine.Transform t = existing[b];
         if (t == null) continue;
-        UnityEngine.Transform p = t.parent;
-        if (p != null && p.name.StartsWith("NZK_NanimBuffer",System.StringComparison.Ordinal))
+        if (t.name.StartsWith("__NZK_NanimBone_",System.StringComparison.Ordinal))
         { report.MeshesSkipped = 1;
-          report.error = "already processed: bone '" + t.name + "' sits under '" + p.name + "'";
+          report.error = "already processed: bone '" + t.name + "'";
           return report; } }
 
       report.MeshesInspected = 1;
@@ -232,7 +236,7 @@ public static partial class Core
          * animation - every frame would describe the same vertices, and reading
          * frame 0 keeps the cost to one pass per shape. */
         mesh.GetBlendShapeFrameVertices(si,0,dPos,dNrm,dTan);
-        Group g = new Group { name = bone.name };
+        Group g = new Group { name = bone.name, nanimationBone = bone };
         for (System.Int32 v = 0; v < vertCount; v++)
         { /* A vertex belongs when the shape DISPLACES it.  The epsilon is well
            * below any authored garment motion (measured deltas run 1.7e-5 to
@@ -311,15 +315,14 @@ public static partial class Core
       if (groups == null || groups.Count == 0) { report.error = "no groups given"; return report; }
 
       /* Same idempotency guard as ApplyFromBlendShapes: a renderer already
-       * carrying a NZK buffer bone has been processed and must not be stacked on. */
+       * carrying one of our bones has been processed and must not be stacked on. */
       UnityEngine.Transform[] existing = renderer.bones;
       for (System.Int32 b = 0; b < existing.Length; b++)
       { UnityEngine.Transform t = existing[b];
         if (t == null) continue;
-        UnityEngine.Transform p = t.parent;
-        if (p != null && p.name.StartsWith("NZK_NanimBuffer",System.StringComparison.Ordinal))
+        if (t.name.StartsWith("__NZK_NanimBone_",System.StringComparison.Ordinal))
         { report.MeshesSkipped = 1;
-          report.error = "already processed: bone '" + t.name + "' sits under '" + p.name + "'";
+          report.error = "already processed: bone '" + t.name + "'";
           return report; } }
 
       report.MeshesInspected = 1;
@@ -614,30 +617,44 @@ public static partial class Core
       for (System.Int32 gi = 0; gi < groups.Count; gi++)
       { Group g = groups[gi];
         if (g == null || g.bones.Count == 0) continue;
+        /* THE CHAIN HANGS UNDER THE NANIMATION BONE THE CLIP DRIVES:
+         *
+         *     Armature/NaNimations/NaNimate Jeans      <- existing, clip target
+         *       └── NZK_NanimBuffer_<n>               <- scale 1, absorbs rig scale
+         *            └── __NZK_NanimBone_<group>_<i>  <- wields the vertex influence
+         *
+         *  The FIRST PORT PARENTED THE BUFFER TO THE MESH'S INFLUENCE BONE and
+         *  renamed that bone to steal the group's path.  That influence bone is
+         *  an ordinary rig bone - `vrc.Hips`, `vrc.Spine`, a toe - so the rename
+         *  hit the RIG (observed: `__NZK_Original_vrc.Hips`), and the new bone
+         *  sat on a path no clip targets.  Parenting under the nanimation bone
+         *  fixes both: the rig is untouched and the clip's NaN scale reaches the
+         *  influence bone by ordinary transform inheritance. */
+        UnityEngine.Transform anchor = g.nanimationBone;
+        if (anchor == null) continue;
+
+        if (!bufferFor.TryGetValue(anchor,out UnityEngine.Transform buffer))
+        { UnityEngine.GameObject bufferObj = new UnityEngine.GameObject("NZK_NanimBuffer_" + report.BuffersCreated);
+          buffer = bufferObj.transform;
+          buffer.SetParent(anchor,false);
+          buffer.localPosition = UnityEngine.Vector3.zero;
+          buffer.localRotation = UnityEngine.Quaternion.identity;
+          buffer.localScale = UnityEngine.Vector3.one;
+          bufferFor[anchor] = buffer;
+          report.BuffersCreated++; }
+
         System.Collections.Generic.List<UnityEngine.GameObject> created =
           new System.Collections.Generic.List<UnityEngine.GameObject>();
         for (System.Int32 b = 0; b < g.bones.Count; b++)
         { AddedBone ab = g.bones[b];
-          UnityEngine.Transform parentBone =
-            ab.originalBoneIndex >= 0 && ab.originalBoneIndex < renderer.bones.Length
-              ? renderer.bones[ab.originalBoneIndex] : null;
-          if (parentBone == null) continue;
-
-          if (!bufferFor.TryGetValue(parentBone,out UnityEngine.Transform buffer))
-          { UnityEngine.GameObject bufferObj = new UnityEngine.GameObject("NZK_NanimBuffer_" + report.BuffersCreated);
-            buffer = bufferObj.transform;
-            buffer.SetParent(parentBone,false);
-            buffer.localPosition = UnityEngine.Vector3.zero;
-            buffer.localRotation = UnityEngine.Quaternion.identity;
-            buffer.localScale = UnityEngine.Vector3.one;
-            bufferFor[parentBone] = buffer;
-            report.BuffersCreated++; }
-
-          /* A SUFFIX ON THE GROUP NAME, because one group can need several bones.
-           * Naming them identically would make the animation side unable to tell
-           * which bone a clip should drive. */
+          /* The child bone carries the influence.  It takes a NEUTRAL interior
+           * name: the clip drives the nanimation bone ABOVE the buffer, and the
+           * NaN scale reaches this bone through the buffer, so naming it after
+           * the group would only create a second object claiming to be the
+           * toggle target.  The index still distinguishes several bones of one
+           * group. */
           UnityEngine.GameObject boneObj = new UnityEngine.GameObject(
-            g.name + (g.bones.Count > 1 ? "_" + b : ""));
+            "__NZK_NanimBone_" + g.name + "_" + b);
           UnityEngine.Transform boneT = boneObj.transform;
           boneT.SetParent(buffer,false);
           boneT.localPosition = UnityEngine.Vector3.zero;
